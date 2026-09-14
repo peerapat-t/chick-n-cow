@@ -1,0 +1,14 @@
+services:
+  chick-n-cow:
+    build: .
+    image: chick-n-cow
+    container_name: chick-n-cow
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      # Cards (including ones added from the settings page) live here and survive rebuilds
+      - cards:/app/cards
+
+volumes:
+  cards:

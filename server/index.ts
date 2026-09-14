@@ -50,6 +50,14 @@ const server = createServer((req, res) => {
   })
 })
 
+// Exit promptly on `docker stop` (Node as PID 1 ignores signals without handlers)
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    server.close()
+    process.exit(0)
+  })
+}
+
 server.listen(PORT, () => {
   console.log(`Chick n Cow running at http://localhost:${PORT}`)
   console.log(`Cards folder: ${CARDS_DIR}`)
