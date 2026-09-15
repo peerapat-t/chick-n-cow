@@ -1,7 +1,7 @@
 import { isMusicPlaying, playCard, startMusic, stopMusic } from './audio'
 import { addCard, deleteCard, getAllCards, prepareImage } from './cards'
 import { btn, esc, qs, switchHtml } from './dom'
-import { LIMITS, getSettings, resetSettings, updateSettings } from './settings'
+import { getSettings, resetSettings, updateSettings } from './settings'
 import { createTrimmer, type Trimmer } from './trimmer'
 import type { Card, MusicTrack, Settings, Theme } from './types'
 
@@ -11,22 +11,6 @@ const section = (title: string, body: string, hint = '') => `
     ${hint ? `<p class="mt-0.5 text-sm text-stone-500 dark:text-stone-400">${hint}</p>` : ''}
     <div class="mt-4">${body}</div>
   </section>`
-
-const stepper = (key: 'rows' | 'cols', label: string, value: number) => `
-  <div class="flex items-center justify-between gap-3">
-    <span>${label}</span>
-    <div class="flex items-center gap-2">
-      <button type="button" data-step="${key}" data-delta="-1" class="${btn.secondary} h-10 w-10 p-0! text-xl" ${value <= LIMITS[key].min ? 'disabled' : ''} aria-label="ลด${label}">−</button>
-      <span class="w-8 text-center text-xl font-semibold tabular-nums">${value}</span>
-      <button type="button" data-step="${key}" data-delta="1" class="${btn.secondary} h-10 w-10 p-0! text-xl" ${value >= LIMITS[key].max ? 'disabled' : ''} aria-label="เพิ่ม${label}">+</button>
-    </div>
-  </div>`
-
-const speedPresets = [
-  { label: 'ช้า', ms: 2000 },
-  { label: 'ปกติ', ms: 1200 },
-  { label: 'เร็ว', ms: 700 },
-]
 
 const themes: { value: Theme; label: string }[] = [
   { value: 'light', label: '☀️ สว่าง' },
@@ -91,34 +75,10 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
           <a href="#/" class="${btn.primary}">▶ ไปเล่นเกม</a>
         </div>
 
-        ${section(
-          '1. ขนาดตาราง',
-          `<div class="flex flex-col gap-3">
-            ${stepper('rows', 'แถว', s.rows)}
-            ${stepper('cols', 'คอลัมน์', s.cols)}
-          </div>`,
-          `ทั้งหมด ${s.rows * s.cols} รูป`,
-        )}
-
-        ${section(
-          '2. ความเร็ว',
-          `<div class="flex flex-col gap-4">
-            <div class="flex items-center gap-4">
-              <input type="range" data-speed min="${LIMITS.speedMs.min}" max="${LIMITS.speedMs.max}" step="${LIMITS.speedMs.step}"
-                value="${LIMITS.speedMs.max + LIMITS.speedMs.min - s.speedMs}" class="w-full accent-emerald-500" aria-label="ความเร็ว" />
-              <span data-speed-label class="w-28 shrink-0 text-right font-semibold tabular-nums">${(s.speedMs / 1000).toFixed(1)} วิ/รูป</span>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              ${speedPresets.map((p) => `<button type="button" data-speed-preset="${p.ms}" class="${pill(s.speedMs === p.ms)}">${p.label}</button>`).join('')}
-            </div>
-          </div>`,
-          'เลื่อนไปทางขวาเพื่อให้กรอบเขียววิ่งเร็วขึ้น',
-        )}
-
-        ${section('3. การ์ดที่ใช้ในเกม', cardsHtml(s), 'ติ๊กเลือกการ์ดที่ต้องการ · แตะที่รูปเพื่อฟังเสียง')}
+        ${section('1. การ์ดที่ใช้ในเกม', cardsHtml(s), 'ติ๊กเลือกการ์ดที่ต้องการ · แตะที่รูปเพื่อฟังเสียง')}
 
         <div data-add-section>${section(
-          '4. เพิ่มการ์ดของฉัน',
+          '2. เพิ่มการ์ดของฉัน',
           `<form data-add class="flex flex-col gap-4">
             <label class="flex flex-col gap-1">
               <span class="text-sm font-medium">ชื่อการ์ด</span>
@@ -149,14 +109,14 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
         )}</div>
 
         ${section(
-          '5. ธีม',
+          '3. ธีม',
           `<div class="flex flex-wrap gap-2">
             ${themes.map((t) => `<button type="button" data-theme-option="${t.value}" class="${pill(s.theme === t.value)}">${t.label}</button>`).join('')}
           </div>`,
         )}
 
         ${section(
-          '6. ดนตรีประกอบ',
+          '4. ดนตรีประกอบ',
           `<div class="flex flex-col gap-4">
             <div class="flex items-center justify-between gap-4">
               <p class="text-sm text-stone-500 dark:text-stone-400">เล่นเพลงระหว่างเกม</p>
@@ -184,7 +144,7 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
           'เสียง',
           `<div class="flex flex-col gap-4">
             <div class="flex items-center justify-between gap-4">
-              <div><p class="font-medium">7. ช่วยออกเสียง</p><p class="text-sm text-stone-500 dark:text-stone-400">อ่านชื่อการ์ดทุกครั้งที่กรอบเขียววิ่งมาถึง</p></div>
+              <div><p class="font-medium">5. ช่วยออกเสียง</p><p class="text-sm text-stone-500 dark:text-stone-400">อ่านชื่อการ์ดทุกครั้งที่กรอบเขียววิ่งมาถึง</p></div>
               ${switchHtml('voice', s.voice, 'ช่วยออกเสียง')}
             </div>
           </div>`,
@@ -212,13 +172,7 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
     if (!t) return
     const s = getSettings()
 
-    if (t.dataset.step) {
-      const key = t.dataset.step as 'rows' | 'cols'
-      const v = Math.min(LIMITS[key].max, Math.max(LIMITS[key].min, s[key] + Number(t.dataset.delta)))
-      set({ [key]: v })
-    } else if (t.dataset.speedPreset) {
-      set({ speedMs: Number(t.dataset.speedPreset) })
-    } else if (t.dataset.themeOption) {
+    if (t.dataset.themeOption) {
       set({ theme: t.dataset.themeOption as Theme })
     } else if (t.dataset.switch) {
       const key = t.dataset.switch as 'music' | 'voice'
@@ -332,18 +286,6 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
     }
   }
 
-  const onInput = (e: Event) => {
-    const t = e.target as HTMLInputElement
-    if (t.dataset.speed === undefined) return
-    // Slider is inverted so that "right" means faster
-    const ms = LIMITS.speedMs.max + LIMITS.speedMs.min - Number(t.value)
-    updateSettings({ speedMs: ms })
-    qs(root, '[data-speed-label]').textContent = `${(ms / 1000).toFixed(1)} วิ/รูป`
-    root.querySelectorAll<HTMLElement>('[data-speed-preset]').forEach((b) => {
-      b.className = pill(Number(b.dataset.speedPreset) === ms)
-    })
-  }
-
   const onSubmit = async (e: SubmitEvent) => {
     const form = e.target as HTMLFormElement
     if (form.dataset.add === undefined) return
@@ -377,7 +319,6 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
   render()
   root.addEventListener('click', onClick)
   root.addEventListener('change', onChange)
-  root.addEventListener('input', onInput)
   root.addEventListener('submit', onSubmit)
 
   return () => {
@@ -387,7 +328,6 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
     revokePreviews()
     root.removeEventListener('click', onClick)
     root.removeEventListener('change', onChange)
-    root.removeEventListener('input', onInput)
     root.removeEventListener('submit', onSubmit)
   }
 }

@@ -12,9 +12,9 @@ npm start         # production server at http://localhost:3000 (PORT, CARDS_DIR)
 ```
 
 ## Features
-- **Game page** (`#/`): press Start → 3-2-1 countdown → green frame moves card by card → end screen with Restart
+- **Game page** (`#/`): 4 levels — 1: 3×3 medium speed, 2: 4×4 fast, 3: 5×5 very fast, 4: 6×6 fastest. Each level starts with a 3-2-1 countdown, there is a short break between levels, and Restart starts again from level 1 (levels are defined in `LEVELS` in `src/game.ts`)
   - Keyboard: `Space` = start/pause, `R` = restart, `F` = fullscreen · tap a card to hear it when the game isn't running
-- **Settings page** (`#/settings`): grid size, speed, choose cards, add custom cards (upload an image + record or upload a sound, then trim it on the waveform), Light/Dark/System theme, music on/off with 3 tracks (slow / normal / fast with drums), pronunciation help on/off
+- **Settings page** (`#/settings`): choose cards, add custom cards (upload an image + record or upload a sound, then trim it on the waveform), Light/Dark/System theme, music on/off with 3 tracks (slow / normal / fast with drums), pronunciation help on/off
 - Settings are saved in `localStorage`; cards are stored on the server in `cards/`
 
 ## Cards
