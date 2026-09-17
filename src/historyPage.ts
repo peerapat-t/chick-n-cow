@@ -1,5 +1,5 @@
 import { btn, esc, qs } from './dom'
-import { getHistory, type HistoryRow } from './history'
+import { clearHistory, getHistory, type HistoryRow } from './history'
 import { LEVEL_COUNT } from './types'
 
 const mmss = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
@@ -88,7 +88,14 @@ export async function mountHistory(root: HTMLElement): Promise<() => void> {
             <h1 class="text-2xl font-bold">📋 ประวัติการเล่น</h1>
             <p class="mt-0.5 text-sm text-stone-500 dark:text-stone-400">บันทึกทุกครั้งที่กด Restart, เล่นจบ หรือออกจากหน้าเกม</p>
           </div>
-          <button type="button" data-refresh class="${btn.secondary} py-2! text-sm">↻ โหลดใหม่</button>
+          <div class="flex gap-2">
+            <button type="button" data-refresh class="${btn.secondary} py-2! text-sm">↻ โหลดใหม่</button>
+            ${
+              rows.length
+                ? `<button type="button" data-clear class="${btn.secondary} py-2! text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40">🗑 ล้างประวัติ</button>`
+                : ''
+            }
+          </div>
         </div>
         ${statsHtml(rows)}
         ${tableHtml(rows)}
@@ -96,11 +103,26 @@ export async function mountHistory(root: HTMLElement): Promise<() => void> {
   }
 
   const onClick = async (e: MouseEvent) => {
-    if (!(e.target as HTMLElement).closest('[data-refresh]')) return
-    const button = qs<HTMLButtonElement>(root, '[data-refresh]')
+    const target = e.target as HTMLElement
+    if (target.closest('[data-refresh]')) {
+      qs<HTMLButtonElement>(root, '[data-refresh]').disabled = true
+      rows = await getHistory(200)
+      render()
+      return
+    }
+    if (!target.closest('[data-clear]')) return
+    if (!confirm(`ล้างประวัติทั้งหมด ${rows.length} รายการ? ข้อมูลในไฟล์จะถูกลบถาวร กู้คืนไม่ได้`)) return
+    const button = qs<HTMLButtonElement>(root, '[data-clear]')
     button.disabled = true
-    rows = await getHistory(200)
-    render()
+    try {
+      await clearHistory()
+      rows = []
+      render()
+    } catch (err) {
+      console.error(err)
+      button.disabled = false
+      alert(`ล้างประวัติไม่สำเร็จ: ${(err as Error).message}`)
+    }
   }
 
   render()

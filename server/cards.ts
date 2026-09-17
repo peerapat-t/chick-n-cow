@@ -338,6 +338,11 @@ export async function cardsMiddleware(req: IncomingMessage, res: ServerResponse,
     if (pathname === '/api/history') {
       if (req.method === 'POST') return sendJson(res, 201, await appendHistory(req))
       if (req.method === 'GET') return sendJson(res, 200, await readHistory(Math.min(200, Number(url.searchParams.get('limit')) || 20)))
+      if (req.method === 'DELETE') {
+        await rm(HISTORY_FILE, { force: true })
+        res.writeHead(204).end()
+        return
+      }
       return sendJson(res, 405, { error: 'Method not allowed' })
     }
 

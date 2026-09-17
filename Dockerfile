@@ -15,7 +15,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production \
     PORT=3000 \
-    CARDS_DIR=/app/cards
+    CARDS_DIR=/app/cards \
+    SOUND_DIR=/app/sound \
+    HISTORY_DIR=/app/history
 
 COPY --from=build /app/dist ./dist
 COPY server ./server
@@ -23,6 +25,8 @@ COPY server ./server
 COPY --chown=node:node cards ./cards
 # Game sounds (sound/start.*, sound/during.*)
 COPY --chown=node:node sound ./sound
+# The play log is written while the app runs, so this folder must belong to the node user
+RUN mkdir -p /app/history && chown node:node /app/history
 
 USER node
 EXPOSE 3000

@@ -36,6 +36,12 @@ export interface HistoryRow {
   reason?: string
 }
 
+/** Empties history/history.txt for good. */
+export async function clearHistory(): Promise<void> {
+  const res = await fetch(`${base}api/history`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(res.statusText)
+}
+
 /** Most recent games first. */
 export async function getHistory(limit = 100): Promise<HistoryRow[]> {
   try {
