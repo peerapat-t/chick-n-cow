@@ -14,7 +14,7 @@ app.innerHTML = `
     <header class="flex h-14 shrink-0 items-center justify-between">
       <a href="#/" class="flex items-center gap-2 text-xl font-bold">
         <span class="text-3xl" aria-hidden="true">🐔</span>
-        Chick n Cow
+        Chick and Cow - หมูหมากาไก่
       </a>
       <nav class="flex gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-stone-200 dark:bg-stone-800 dark:ring-stone-700">
         <a href="#/" data-nav="game" class="rounded-full px-4 py-1.5 text-sm font-medium transition">🎮 เกม</a>

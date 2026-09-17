@@ -1,5 +1,8 @@
 export type Theme = 'light' | 'dark' | 'system'
 
+/** easy: fixed pace every level · medium: the normal climb · hard: a steeper climb */
+export type Difficulty = 'easy' | 'medium' | 'hard'
+
 /** Every level uses the same grid; only the speed changes. */
 export const ROWS = 2
 export const COLS = 4
@@ -10,6 +13,7 @@ export interface Settings {
   /** Card ids allowed in each level; index 0 is level 1. Never empty. */
   levelPools: string[][]
   theme: Theme
+  difficulty: Difficulty
   /** Play the start/during sound files */
   sound: boolean
   /** Whistle each time the frame moves to the next card */

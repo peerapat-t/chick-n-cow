@@ -1,10 +1,10 @@
 import { loadGameSounds, playCardSound } from './audio'
 import { addCard, deleteCard, getAllCards, prepareImage } from './cards'
 import { btn, esc, qs, switchHtml } from './dom'
-import { levelTiming } from './game'
+import { DIFFICULTIES } from './game'
 import { addCardToAllPools, getSettings, resetSettings, syncPoolsWithCards, updateSettings } from './settings'
 import { createTrimmer, type Trimmer } from './trimmer'
-import { LEVEL_COUNT, type Card, type GameSounds, type Settings, type Theme } from './types'
+import { LEVEL_COUNT, type Card, type Difficulty, type GameSounds, type Settings, type Theme } from './types'
 
 const section = (title: string, body: string, hint = '') => `
   <section class="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-stone-200 sm:p-6 dark:bg-stone-800 dark:ring-stone-700">
@@ -79,7 +79,7 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
       <div data-drop="${i}" class="rounded-2xl p-3 ring-1 ring-stone-200 transition dark:ring-stone-700">
         <div class="flex items-baseline justify-between gap-2">
           <span class="font-semibold">ด่าน ${i + 1}</span>
-          <span class="text-xs text-stone-500 tabular-nums dark:text-stone-400">${(levelTiming(i + 1).stepMs / 1000).toFixed(2)} วิ/รูป · เสียง ×${levelTiming(i + 1).rate.toFixed(2)} · ${pool.length} รูป</span>
+          <span class="text-xs text-stone-500 tabular-nums dark:text-stone-400">${pool.length} รูป</span>
         </div>
         <div class="mt-2 flex min-h-12 flex-wrap items-center gap-2">
           ${pool.map((id) => cardById(id)).filter((c): c is Card => Boolean(c)).map((c) => chipHtml(c, i)).join('')}
@@ -178,14 +178,22 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
         )}</div>
 
         ${section(
-          '4. ธีม',
+          '4. ความยาก',
+          `<div class="flex flex-wrap gap-2">
+            ${DIFFICULTIES.map((d) => `<button type="button" data-difficulty-option="${d.value}" class="${pill(s.difficulty === d.value)}">${d.label}</button>`).join('')}
+          </div>`,
+          'Easy ความเร็วคงที่ทุกด่าน · Medium ค่อย ๆ เร็วขึ้น · Hard เร่งเร็วขึ้นมาก',
+        )}
+
+        ${section(
+          '5. ธีม',
           `<div class="flex flex-wrap gap-2">
             ${themes.map((t) => `<button type="button" data-theme-option="${t.value}" class="${pill(s.theme === t.value)}">${t.label}</button>`).join('')}
           </div>`,
         )}
 
         ${section(
-          '5. เสียง',
+          '6. เสียง',
           `<div class="flex flex-col gap-5">
             <div class="flex items-center justify-between gap-4">
               <div>
@@ -322,7 +330,10 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
     if (!t) return
     const s = getSettings()
 
-    if (t.dataset.themeOption) {
+    if (t.dataset.difficultyOption) {
+      updateSettings({ difficulty: t.dataset.difficultyOption as Difficulty })
+      render()
+    } else if (t.dataset.themeOption) {
       updateSettings({ theme: t.dataset.themeOption as Theme })
       render()
     } else if (t.dataset.switch) {

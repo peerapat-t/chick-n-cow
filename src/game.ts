@@ -14,21 +14,31 @@ import {
 import { getAllCards } from './cards'
 import { btn, esc, qs } from './dom'
 import { saveRunHistory, type RunResult } from './history'
-import { syncPoolsWithCards } from './settings'
-import { CELLS, COLS, LEVEL_COUNT, ROWS, type Card } from './types'
+import { getSettings, syncPoolsWithCards } from './settings'
+import { CELLS, COLS, LEVEL_COUNT, ROWS, type Card, type Difficulty } from './types'
 
 /** Card speeds used only when there is no sound/during.* file to take the timing from */
 const START_SPEED_MS = 1400
 const END_SPEED_MS = 450
 
-/** How fast the sounds are played: 1× on level 1, RATE_END× on the last level. */
-const RATE_END = 2.2
+/** Easy keeps every level at this time per card */
+const EASY_STEP_MS = 320
 
 /**
- * Shapes the climb between those two. Above 1 the early levels speed up gently and the
- * jumps get bigger later, which keeps levels 2-4 close to the pace of level 1.
+ * How fast the sounds are played on medium and hard: 1× on level 1, `end`× on the last level.
+ * `curve` shapes the climb between those two. Above 1 the early levels speed up gently and
+ * the jumps get bigger later, which keeps levels 2-4 close to the pace of level 1.
  */
-const RATE_CURVE = 1.4
+const CLIMB: Record<Exclude<Difficulty, 'easy'>, { end: number; curve: number }> = {
+  medium: { end: 2.2, curve: 1.4 },
+  hard: { end: 3.2, curve: 1 },
+}
+
+export const DIFFICULTIES: { value: Difficulty; label: string }[] = [
+  { value: 'easy', label: 'Easy' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'hard', label: 'Hard' },
+]
 
 /** No frame at all for this share of the sound — the get-ready part... */
 const INTRO_SHARE = 0.5
@@ -41,7 +51,8 @@ const DEFAULT_COUNT_MS = 1000
 /** The level sound fades out this quickly if a level is cut short */
 const LEVEL_FADE_MS = 200
 
-const rateOf = (level: number) => 1 + (RATE_END - 1) * ((level - 1) / (LEVEL_COUNT - 1)) ** RATE_CURVE
+/** 0 on level 1 up to 1 on the last level, bent by the difficulty's curve */
+const climbOf = (level: number, { curve }: { curve: number }) => ((level - 1) / (LEVEL_COUNT - 1)) ** curve
 
 export interface LevelTiming {
   /** Playback rate of the sounds */
@@ -59,11 +70,21 @@ export interface LevelTiming {
  * frame covers all the cards over the rest of it, finishing as the sound ends.
  * With no sound file it falls back to fixed card speeds.
  */
-export function levelTiming(level: number): LevelTiming {
-  const rate = rateOf(level)
+export function levelTiming(level: number, difficulty: Difficulty = getSettings().difficulty): LevelTiming {
   const seconds = duringDuration()
+  if (difficulty === 'easy') {
+    if (!seconds) return { rate: 1, holdMs: EASY_STEP_MS, stepMs: EASY_STEP_MS, totalMs: EASY_STEP_MS * (CELLS + 1) }
+    // Play the sound at whatever tempo makes the cards land on EASY_STEP_MS
+    const playMs = (EASY_STEP_MS * CELLS) / MAIN_SHARE
+    return { rate: (seconds * 1000) / playMs, holdMs: playMs * INTRO_SHARE, stepMs: EASY_STEP_MS, totalMs: playMs }
+  }
+  const climb = CLIMB[difficulty]
+  const t = climbOf(level, climb)
+  const rate = 1 + (climb.end - 1) * t
   if (!seconds) {
-    const stepMs = Math.round(START_SPEED_MS * (END_SPEED_MS / START_SPEED_MS) ** ((level - 1) / (LEVEL_COUNT - 1)))
+    // Medium keeps the original even climb; hard stretches it by how much further its sound climbs
+    const linear = ((level - 1) / (LEVEL_COUNT - 1)) * ((climb.end - 1) / (CLIMB.medium.end - 1))
+    const stepMs = Math.round(START_SPEED_MS * (END_SPEED_MS / START_SPEED_MS) ** linear)
     return { rate, holdMs: stepMs, stepMs, totalMs: stepMs * (CELLS + 1) }
   }
   const playMs = (seconds / rate) * 1000
@@ -175,14 +196,15 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
     saveRunHistory({ level, cards: cardsSeen, seconds, reason })
   }
 
-  const levelInfo = (l: number) => {
-    const t = levelTiming(l)
-    return `${(t.stepMs / 1000).toFixed(2)} วิ/รูป · เสียง ×${t.rate.toFixed(2)}`
+  const difficultyLabel = () => DIFFICULTIES.find((d) => d.value === getSettings().difficulty)!.label
+
+  const levelInfo = () => {
+    return `โหมด ${difficultyLabel()}`
   }
 
   function renderStatus() {
     badge.textContent = `ด่าน ${level}/${LEVEL_COUNT}`
-    levelInfoEl.textContent = levelInfo(level)
+    levelInfoEl.textContent = levelInfo()
   }
 
   /** Shuffles a new grid for the current level. */
@@ -225,8 +247,7 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
       <div class="flex flex-col items-center gap-4 text-center animate-pop">
         <button data-action="start" class="${btn.primary} px-10 py-5 text-2xl shadow-lg">▶ เริ่มเล่น</button>
         <p class="text-stone-600 dark:text-stone-300">
-          ${LEVEL_COUNT} ด่าน · ตาราง ${ROWS}×${COLS}<br />
-          ด่าน 1 ${(levelTiming(1).stepMs / 1000).toFixed(2)} วิ/รูป → ด่าน ${LEVEL_COUNT} ${(levelTiming(LEVEL_COUNT).stepMs / 1000).toFixed(2)} วิ/รูป
+          ${LEVEL_COUNT} ด่าน · ตาราง ${ROWS}×${COLS} · โหมด ${difficultyLabel()}
         </p>
       </div>`)
   }
@@ -247,7 +268,7 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
     const until = segment?.endsAt ?? from + countdownMs(rate) / 1000
     const beat = (until - from) / 4
 
-    const title = `<p class="text-2xl font-semibold text-stone-700 dark:text-stone-200">ด่าน ${level} · ${(levelTiming(level).stepMs / 1000).toFixed(2)} วิ/รูป</p>`
+    const title = `<p class="text-2xl font-semibold text-stone-700 dark:text-stone-200">ด่าน ${level} · โหมด ${difficultyLabel()}</p>`
     for (const n of [3, 2, 1]) {
       at(from + (3 - n) * beat, () => {
         showOverlay(`

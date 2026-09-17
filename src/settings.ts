@@ -1,10 +1,11 @@
-import { LEVEL_COUNT, type Settings, type Theme } from './types'
+import { LEVEL_COUNT, type Difficulty, type Settings, type Theme } from './types'
 
 const KEY = 'chick-n-cow:settings'
 
 export const DEFAULT_SETTINGS: Settings = {
   levelPools: Array.from({ length: LEVEL_COUNT }, () => []),
   theme: 'system',
+  difficulty: 'medium',
   sound: true,
   whistle: true,
 }
@@ -15,6 +16,7 @@ function load(): Settings {
     const pools: string[][] = Array.isArray(s.levelPools) ? s.levelPools : []
     return {
       theme: (['light', 'dark', 'system'] as Theme[]).includes(s.theme) ? s.theme : DEFAULT_SETTINGS.theme,
+      difficulty: (['easy', 'medium', 'hard'] as Difficulty[]).includes(s.difficulty) ? s.difficulty : DEFAULT_SETTINGS.difficulty,
       sound: Boolean(s.sound),
       whistle: Boolean(s.whistle),
       levelPools: Array.from({ length: LEVEL_COUNT }, (_, i) =>
