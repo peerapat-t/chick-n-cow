@@ -1,27 +1,28 @@
-import type { Settings, Theme } from './types'
+import { LEVEL_COUNT, type Settings, type Theme } from './types'
 
 const KEY = 'chick-n-cow:settings'
 
 export const DEFAULT_SETTINGS: Settings = {
-  disabledIds: [],
+  levelPools: Array.from({ length: LEVEL_COUNT }, () => []),
   theme: 'system',
-  music: true,
-  musicTrack: 'normal',
-  voice: true,
+  sound: true,
+  whistle: true,
 }
 
 function load(): Settings {
   try {
     const s = { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') }
+    const pools: string[][] = Array.isArray(s.levelPools) ? s.levelPools : []
     return {
-      theme: ['light', 'dark', 'system'].includes(s.theme) ? s.theme : DEFAULT_SETTINGS.theme,
-      music: Boolean(s.music),
-      voice: Boolean(s.voice),
-      disabledIds: Array.isArray(s.disabledIds) ? s.disabledIds : [],
-      musicTrack: ['slow', 'normal', 'fast'].includes(s.musicTrack) ? s.musicTrack : DEFAULT_SETTINGS.musicTrack,
+      theme: (['light', 'dark', 'system'] as Theme[]).includes(s.theme) ? s.theme : DEFAULT_SETTINGS.theme,
+      sound: Boolean(s.sound),
+      whistle: Boolean(s.whistle),
+      levelPools: Array.from({ length: LEVEL_COUNT }, (_, i) =>
+        Array.isArray(pools[i]) ? pools[i].filter((id) => typeof id === 'string') : [],
+      ),
     }
   } catch {
-    return { ...DEFAULT_SETTINGS }
+    return { ...DEFAULT_SETTINGS, levelPools: DEFAULT_SETTINGS.levelPools.map((p) => [...p]) }
   }
 }
 
@@ -40,8 +41,27 @@ export function updateSettings(patch: Partial<Settings>): Settings {
   return current
 }
 
-export function resetSettings(): Settings {
-  return updateSettings({ ...DEFAULT_SETTINGS })
+/**
+ * Drops cards that no longer exist and makes sure no level is left empty
+ * (an empty level falls back to every card).
+ */
+export function syncPoolsWithCards(cardIds: string[]): Settings {
+  const known = new Set(cardIds)
+  const pools = current.levelPools.map((pool) => {
+    const kept = [...new Set(pool.filter((id) => known.has(id)))]
+    return kept.length > 0 ? kept : [...cardIds]
+  })
+  const changed = JSON.stringify(pools) !== JSON.stringify(current.levelPools)
+  return changed ? updateSettings({ levelPools: pools }) : current
+}
+
+/** A newly added card starts out available in every level. */
+export function addCardToAllPools(cardId: string): Settings {
+  return updateSettings({ levelPools: current.levelPools.map((pool) => (pool.includes(cardId) ? pool : [...pool, cardId])) })
+}
+
+export function resetSettings(cardIds: string[]): Settings {
+  return updateSettings({ ...DEFAULT_SETTINGS, levelPools: Array.from({ length: LEVEL_COUNT }, () => [...cardIds]) })
 }
 
 const darkQuery = matchMedia('(prefers-color-scheme: dark)')

@@ -18,11 +18,11 @@ export async function getAllCards(): Promise<Card[]> {
 }
 
 /** Uploads a card; the server stores it as its own folder in cards/. */
-export async function addCard(label: string, image: Blob, sound?: Blob): Promise<void> {
+export async function addCard(label: string, image: Blob, sound: Blob): Promise<void> {
   const form = new FormData()
   form.append('label', label)
   form.append('image', image)
-  if (sound) form.append('sound', sound)
+  form.append('sound', sound)
   const res = await fetch(`${base}api/cards`, { method: 'POST', body: form })
   if (!res.ok) throw new Error(await errorMessage(res))
 }

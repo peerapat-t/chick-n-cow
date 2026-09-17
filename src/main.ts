@@ -1,6 +1,7 @@
 import './style.css'
-import { stopCardSound } from './audio'
 import { mountGame } from './game'
+import { mountCards } from './cardsPage'
+import { mountHistory } from './historyPage'
 import { applyTheme } from './settings'
 import { mountSettings } from './settingsPage'
 
@@ -18,6 +19,8 @@ app.innerHTML = `
       <nav class="flex gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-stone-200 dark:bg-stone-800 dark:ring-stone-700">
         <a href="#/" data-nav="game" class="rounded-full px-4 py-1.5 text-sm font-medium transition">🎮 เกม</a>
         <a href="#/settings" data-nav="settings" class="rounded-full px-4 py-1.5 text-sm font-medium transition">⚙️ ตั้งค่า</a>
+        <a href="#/cards" data-nav="cards" class="rounded-full px-4 py-1.5 text-sm font-medium transition">📚 สรุปการ์ด</a>
+        <a href="#/history" data-nav="history" class="rounded-full px-4 py-1.5 text-sm font-medium transition">📋 ประวัติ</a>
       </nav>
     </header>
     <main id="view" class="flex-1"></main>
@@ -31,9 +34,9 @@ async function route() {
   const id = ++navId
   cleanup?.()
   cleanup = undefined
-  stopCardSound()
 
-  const page = location.hash === '#/settings' ? 'settings' : 'game'
+  const routes = { "#/settings": "settings", "#/cards": "cards", "#/history": "history" } as const
+  const page = routes[location.hash as keyof typeof routes] ?? "game"
   app.querySelectorAll<HTMLElement>('[data-nav]').forEach((a) => {
     const active = a.dataset.nav === page
     a.classList.toggle('bg-emerald-500', active)
@@ -42,7 +45,8 @@ async function route() {
 
   let dispose: () => void
   try {
-    dispose = await (page === 'settings' ? mountSettings(view) : mountGame(view))
+    const mount = { settings: mountSettings, cards: mountCards, history: mountHistory, game: mountGame }[page]
+    dispose = await mount(view)
   } catch (err) {
     console.error(err)
     if (id !== navId) return

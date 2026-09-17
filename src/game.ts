@@ -1,27 +1,76 @@
-import { beep, playCard, preloadCardSounds, startMusic, stopCardSound, stopMusic } from './audio'
+import {
+  audioNow,
+  beep,
+  duringDuration,
+  hasStartSound,
+  loadGameSounds,
+  scheduleDuringSound,
+  scheduleStartSound,
+  startDuration,
+  stopDuringSound,
+  stopStartSound,
+  whistle,
+} from './audio'
 import { getAllCards } from './cards'
 import { btn, esc, qs } from './dom'
-import { getSettings } from './settings'
-import type { Card } from './types'
+import { saveRunHistory, type RunResult } from './history'
+import { syncPoolsWithCards } from './settings'
+import { CELLS, COLS, LEVEL_COUNT, ROWS, type Card } from './types'
 
-interface Level {
-  size: number
-  /** Time each card stays highlighted, in milliseconds */
-  speedMs: number
-  speedLabel: string
+/** Card speeds used only when there is no sound/during.* file to take the timing from */
+const START_SPEED_MS = 1400
+const END_SPEED_MS = 450
+
+/** How fast the sounds are played: 1× on level 1, RATE_END× on the last level. */
+const RATE_END = START_SPEED_MS / END_SPEED_MS
+
+/** No frame at all for this share of the sound — the get-ready part... */
+const INTRO_SHARE = 0.5
+/** ...then the frame walks every card over the rest of it, ending exactly with the sound. */
+const MAIN_SHARE = 1 - INTRO_SHARE
+
+/** One count of the 3-2-1 when there is no start sound to pace it */
+const DEFAULT_COUNT_MS = 1000
+
+/** The level sound fades out this quickly if a level is cut short */
+const LEVEL_FADE_MS = 200
+
+const rateOf = (level: number) => RATE_END ** ((level - 1) / (LEVEL_COUNT - 1))
+
+export interface LevelTiming {
+  /** Playback rate of the sounds */
+  rate: number
+  /** How long the grid shows with no frame before the first card, in ms */
+  holdMs: number
+  /** Time per card once the frame appears, in ms */
+  stepMs: number
+  /** Length of the whole level, in ms */
+  totalMs: number
 }
 
-const LEVELS: Level[] = [
-  { size: 3, speedMs: 1200, speedLabel: 'ปานกลาง' },
-  { size: 4, speedMs: 850, speedLabel: 'เร็ว' },
-  { size: 5, speedMs: 600, speedLabel: 'เร็วมาก' },
-  { size: 6, speedMs: 450, speedLabel: 'เร็วสุดๆ' },
-]
+/**
+ * One level lasts exactly one play of sound/during.*: no frame during the intro, then the
+ * frame covers all the cards over the rest of it, finishing as the sound ends.
+ * With no sound file it falls back to fixed card speeds.
+ */
+export function levelTiming(level: number): LevelTiming {
+  const rate = rateOf(level)
+  const seconds = duringDuration()
+  if (!seconds) {
+    const stepMs = Math.round(START_SPEED_MS * (END_SPEED_MS / START_SPEED_MS) ** ((level - 1) / (LEVEL_COUNT - 1)))
+    return { rate, holdMs: stepMs, stepMs, totalMs: stepMs * (CELLS + 1) }
+  }
+  const playMs = (seconds / rate) * 1000
+  return { rate, holdMs: playMs * INTRO_SHARE, stepMs: (playMs * MAIN_SHARE) / CELLS, totalMs: playMs }
+}
 
-/** Pause between levels (before the next countdown starts) */
-const LEVEL_BREAK_MS = 2000
+/** How long the whole 3-2-1 takes at this level's tempo, in ms */
+function countdownMs(rate: number): number {
+  const seconds = startDuration()
+  return seconds ? (seconds * 1000) / rate : (DEFAULT_COUNT_MS * 4) / rate
+}
 
-type Phase = 'idle' | 'countdown' | 'playing' | 'paused' | 'break' | 'finished'
+type Phase = 'idle' | 'countdown' | 'playing' | 'paused' | 'finished'
 
 /** Random grid where the same card never appears 3 times in a row (when there's a choice). */
 function buildSequence(cards: Card[], length: number): Card[] {
@@ -36,43 +85,43 @@ function buildSequence(cards: Card[], length: number): Card[] {
   return seq
 }
 
-const levelName = (i: number) => `ด่าน ${i + 1}`
-const levelInfo = (l: Level) => `${l.size}×${l.size} · ${l.speedLabel}`
-
 export async function mountGame(root: HTMLElement): Promise<() => void> {
-  const settings = getSettings()
-  const allCards = await getAllCards()
-  const cards = allCards.filter((c) => !settings.disabledIds.includes(c.id))
+  const [allCards] = await Promise.all([getAllCards(), loadGameSounds()])
+  const settings = syncPoolsWithCards(allCards.map((c) => c.id))
+  const byId = new Map(allCards.map((c) => [c.id, c]))
 
-  if (cards.length === 0) {
+  if (allCards.length === 0) {
     root.innerHTML = `
       <div class="mx-auto flex max-w-md flex-col items-center gap-4 py-20 text-center">
         <p class="text-5xl">🙈</p>
-        <p class="text-lg">ยังไม่ได้เลือกการ์ดเลย</p>
-        <a href="#/settings" class="${btn.primary}">ไปที่ตั้งค่า</a>
+        <p class="text-lg">ยังไม่มีการ์ดเลย</p>
+        <a href="#/settings" class="${btn.primary}">ไปเพิ่มการ์ด</a>
       </div>`
     return () => {}
   }
 
-  preloadCardSounds(cards)
+  /** Cards allowed in this level (falls back to every card if the pool is somehow empty) */
+  const poolOf = (level: number): Card[] => {
+    const ids = settings.levelPools[level - 1] ?? []
+    const pool = ids.map((id) => byId.get(id)).filter((c): c is Card => Boolean(c))
+    return pool.length > 0 ? pool : allCards
+  }
 
   root.innerHTML = `
     <div class="flex h-[calc(100dvh-3.5rem)] flex-col gap-2 pb-3">
       <div class="flex shrink-0 flex-wrap items-center justify-center gap-2 sm:justify-between">
-        <div class="flex items-center gap-3 text-sm">
-          <div data-levels class="flex gap-1.5"></div>
+        <div class="flex items-center gap-2 text-sm">
+          <span data-level-badge class="flex h-7 items-center rounded-full bg-emerald-500 px-3 text-xs font-semibold text-white"></span>
           <span data-level-info class="text-stone-500 dark:text-stone-400"></span>
           <span data-progress class="font-medium text-emerald-600 tabular-nums dark:text-emerald-400"></span>
+          <span class="hidden text-stone-400 sm:inline dark:text-stone-500">· แตะกลางจอเพื่อหยุด</span>
         </div>
-        <div class="flex gap-2">
-          <button data-action="fullscreen" class="${btn.secondary} py-2!" aria-label="เต็มจอ">⛶ เต็มจอ</button>
-          <button data-action="pause" class="${btn.secondary} py-2!" disabled>⏸ หยุด</button>
-          <button data-action="restart" class="${btn.primary} py-2!">↻ Restart</button>
-        </div>
+        <button data-action="restart" class="${btn.primary} py-2!">↻ Restart</button>
       </div>
 
       <div class="relative min-h-0 flex-1">
-        <div data-grid class="grid h-full gap-1.5 p-1 sm:gap-2.5"></div>
+        <div data-grid class="grid h-full gap-2 p-1 sm:gap-3"
+          style="grid-template-columns: repeat(${COLS}, minmax(0, 1fr)); grid-template-rows: repeat(${ROWS}, minmax(0, 1fr))"></div>
         <div data-overlay class="absolute inset-0 flex items-center justify-center rounded-3xl bg-amber-50/70 backdrop-blur-sm dark:bg-stone-900/70"></div>
       </div>
     </div>`
@@ -80,55 +129,70 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
   const grid = qs(root, '[data-grid]')
   const overlay = qs(root, '[data-overlay]')
   const progress = qs(root, '[data-progress]')
-  const levelsEl = qs(root, '[data-levels]')
+  const badge = qs(root, '[data-level-badge]')
   const levelInfoEl = qs(root, '[data-level-info]')
-  const pauseBtn = qs<HTMLButtonElement>(root, '[data-action="pause"]')
-  const fullscreenBtn = qs<HTMLButtonElement>(root, '[data-action="fullscreen"]')
 
   let phase: Phase = 'idle'
-  let levelIndex = 0
+  let level = 1
   let sequence: Card[] = []
   let index = -1
-  let timer: number | undefined
+  /** Context time this level's sound started, used to work out where a pause happened */
+  let levelStartedAt = 0
+  let pausedElapsedMs = 0
+  let runStartedAt = 0
+  let cardsSeen = 0
+  /** The level sound, queued up while the countdown is still running */
+  let queuedLevelAt = 0
+  let timers: number[] = []
 
-  const level = () => LEVELS[levelIndex]
-  const total = () => level().size ** 2
-
-  const clearTimer = () => {
-    clearTimeout(timer)
-    timer = undefined
+  /** Runs `fn` at a point on the audio clock, so visuals follow the sound. */
+  function at(contextTime: number, fn: () => void) {
+    timers.push(window.setTimeout(fn, Math.max(0, (contextTime - audioNow()) * 1000)))
   }
 
-  function renderLevelBar() {
-    levelsEl.innerHTML = LEVELS.map((_, i) => {
-      const cls =
-        i < levelIndex || phase === 'finished'
-          ? 'bg-emerald-500 text-white'
-          : i === levelIndex
-            ? 'bg-emerald-100 text-emerald-700 ring-2 ring-emerald-500 dark:bg-emerald-950 dark:text-emerald-300'
-            : 'bg-stone-200 text-stone-500 dark:bg-stone-700 dark:text-stone-400'
-      return `<span class="flex h-7 min-w-7 items-center justify-center rounded-full px-2 text-xs font-semibold ${cls}">${i + 1}</span>`
-    }).join('')
-    levelInfoEl.textContent = `${levelName(levelIndex)} · ${levelInfo(level())}`
+  function afterMs(ms: number, fn: () => void) {
+    timers.push(window.setTimeout(fn, Math.max(0, ms)))
+  }
+
+  function clearTimers() {
+    timers.forEach(clearTimeout)
+    timers = []
+  }
+
+  /** Writes one line to history/<date>.txt — on Restart, on finishing, and on leaving mid-game. */
+  function saveRun(reason: RunResult['reason']) {
+    if (!runStartedAt) return
+    const seconds = Math.round((Date.now() - runStartedAt) / 1000)
+    runStartedAt = 0
+    // A run where no card was ever shown is not worth a line
+    if (cardsSeen === 0) return
+    saveRunHistory({ level, cards: cardsSeen, seconds, reason })
+  }
+
+  const levelInfo = (l: number) => {
+    const t = levelTiming(l)
+    return `${(t.stepMs / 1000).toFixed(2)} วิ/รูป · เสียง ×${t.rate.toFixed(2)}`
+  }
+
+  function renderStatus() {
+    badge.textContent = `ด่าน ${level}/${LEVEL_COUNT}`
+    levelInfoEl.textContent = levelInfo(level)
   }
 
   /** Shuffles a new grid for the current level. */
   function prepareLevel() {
-    const { size } = level()
-    sequence = buildSequence(cards, total())
+    sequence = buildSequence(poolOf(level), CELLS)
     index = -1
-    grid.style.gridTemplateColumns = `repeat(${size}, minmax(0, 1fr))`
-    grid.style.gridTemplateRows = `repeat(${size}, minmax(0, 1fr))`
     grid.innerHTML = sequence
       .map(
         (card, i) => `
-        <button data-cell="${i}" aria-label="${esc(card.label)}"
-          class="relative min-h-0 min-w-0 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-stone-200 outline-none transition duration-200 dark:bg-stone-800 dark:ring-stone-700">
+        <div data-cell="${i}" role="img" aria-label="${esc(card.label)}"
+          class="relative min-h-0 min-w-0 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-stone-200 transition duration-200 dark:bg-stone-800 dark:ring-stone-700">
           <img src="${card.image}" alt="" draggable="false" class="h-full w-full select-none object-contain p-[6%]" />
-        </button>`,
+        </div>`,
       )
       .join('')
-    renderLevelBar()
+    renderStatus()
     highlight(-1)
   }
 
@@ -142,7 +206,7 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
       cell.classList.toggle('shadow-xl', active)
       cell.classList.toggle('opacity-50', i >= 0 && n < i)
     })
-    progress.textContent = i >= 0 ? `${Math.min(i + 1, total())} / ${total()}` : ''
+    progress.textContent = i >= 0 ? `${Math.min(i + 1, CELLS)} / ${CELLS}` : ''
   }
 
   function showOverlay(html: string) {
@@ -152,112 +216,138 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
 
   function showStart() {
     showOverlay(`
-      <div class="flex flex-col items-center gap-5 text-center animate-pop">
+      <div class="flex flex-col items-center gap-4 text-center animate-pop">
         <button data-action="start" class="${btn.primary} px-10 py-5 text-2xl shadow-lg">▶ เริ่มเล่น</button>
-        <ol class="flex flex-col gap-1 text-stone-600 dark:text-stone-300">
-          ${LEVELS.map((l, i) => `<li><span class="font-semibold">${levelName(i)}</span> · ${levelInfo(l)}</li>`).join('')}
-        </ol>
+        <p class="text-stone-600 dark:text-stone-300">
+          ${LEVEL_COUNT} ด่าน · ตาราง ${ROWS}×${COLS}<br />
+          ด่าน 1 ${(levelTiming(1).stepMs / 1000).toFixed(2)} วิ/รูป → ด่าน ${LEVEL_COUNT} ${(levelTiming(LEVEL_COUNT).stepMs / 1000).toFixed(2)} วิ/รูป
+        </p>
       </div>`)
   }
 
-  function updateControls() {
-    pauseBtn.disabled = phase !== 'playing' && phase !== 'paused'
-    pauseBtn.textContent = phase === 'paused' ? '▶ เล่นต่อ' : '⏸ หยุด'
-  }
+  /**
+   * Runs the 3-2-1 for the current level and hands straight over to the level itself.
+   * `startAt` is a point on the audio clock, so one level's sound can run into the next
+   * countdown with no gap at all.
+   */
+  function beginCountdown(startAt?: number) {
+    phase = 'countdown'
+    renderStatus()
+    const { rate } = levelTiming(level)
+    const withSound = settings.sound && hasStartSound()
+    const begin = startAt ?? audioNow() + 0.05
+    const segment = withSound ? scheduleStartSound(rate, begin) : null
+    const from = segment?.at ?? begin
+    const until = segment?.endsAt ?? from + countdownMs(rate) / 1000
+    const beat = (until - from) / 4
 
-  function setPhase(p: Phase) {
-    phase = p
-    updateControls()
-    if (settings.music && (p === 'countdown' || p === 'playing' || p === 'break')) startMusic(settings.musicTrack)
-    else stopMusic()
-  }
-
-  function countdown(n: number) {
-    const title = `<p class="text-2xl font-semibold text-stone-700 dark:text-stone-200">${levelName(levelIndex)} · ${levelInfo(level())}</p>`
-    if (n === 0) {
-      showOverlay(`<div class="flex flex-col items-center gap-2 text-center">${title}<p class="text-7xl font-bold text-emerald-500 animate-pop sm:text-8xl">เริ่ม!</p></div>`)
-      beep(true)
-      timer = window.setTimeout(() => {
-        overlay.hidden = true
-        setPhase('playing')
-        step()
-      }, 700)
-      return
+    const title = `<p class="text-2xl font-semibold text-stone-700 dark:text-stone-200">ด่าน ${level} · ${(levelTiming(level).stepMs / 1000).toFixed(2)} วิ/รูป</p>`
+    for (const n of [3, 2, 1]) {
+      at(from + (3 - n) * beat, () => {
+        showOverlay(`
+          <div class="flex flex-col items-center gap-2 text-center">
+            ${title}
+            <p class="font-bold text-emerald-500 drop-shadow animate-pop" style="font-size: min(10rem, 25vw); line-height: 1">${n}</p>
+          </div>`)
+        if (!segment) beep()
+      })
     }
-    showOverlay(`
-      <div class="flex flex-col items-center gap-2 text-center">
-        ${title}
-        <p class="font-bold text-emerald-500 drop-shadow animate-pop" style="font-size: min(10rem, 25vw); line-height: 1">${n}</p>
-      </div>`)
-    beep()
-    timer = window.setTimeout(() => countdown(n - 1), 1000)
+    at(from + 3 * beat, () => {
+      showOverlay(`<div class="flex flex-col items-center gap-2 text-center">${title}<p class="text-7xl font-bold text-emerald-500 animate-pop sm:text-8xl">เริ่ม!</p></div>`)
+      if (!segment) beep(true)
+    })
+
+    // Queue the level sound now, for the exact sample the countdown ends on
+    const levelSound = settings.sound ? scheduleDuringSound(rate, until) : null
+    queuedLevelAt = levelSound?.at ?? until
+    at(until, () => startLevel(queuedLevelAt))
   }
 
-  function step() {
-    index++
-    if (index >= total()) return completeLevel()
-    highlight(index)
-    if (settings.voice) playCard(sequence[index])
-    timer = window.setTimeout(step, level().speedMs)
+  /** Runs one level; its sound was already queued to begin at `startAt`. */
+  function startLevel(startAt: number) {
+    phase = 'playing'
+    overlay.hidden = true
+    const { holdMs, stepMs, totalMs } = levelTiming(level)
+    levelStartedAt = startAt
+    pausedElapsedMs = 0
+    index = -1
+    highlight(-1)
+    scheduleCards(holdMs, stepMs, totalMs, 0)
+  }
+
+  /** Schedules the remaining cards of the level, `elapsedMs` into it. */
+  function scheduleCards(holdMs: number, stepMs: number, totalMs: number, elapsedMs: number) {
+    for (let i = index + 1; i < CELLS; i++) {
+      const cardAt = holdMs + i * stepMs
+      if (cardAt < elapsedMs) continue
+      afterMs(cardAt - elapsedMs, () => {
+        index = i
+        highlight(i)
+        cardsSeen++
+        if (settings.whistle) whistle()
+      })
+    }
+    afterMs(totalMs - elapsedMs, completeLevel)
   }
 
   function completeLevel() {
-    clearTimer()
-    stopCardSound()
-    if (levelIndex === LEVELS.length - 1) return finish()
-
-    const passed = levelIndex
-    levelIndex++
-    setPhase('break')
+    clearTimers()
+    const endsAt = levelStartedAt + (levelTiming(level).totalMs - pausedElapsedMs) / 1000
+    if (level >= LEVEL_COUNT) return finish()
+    level++
     prepareLevel()
-    showOverlay(`
-      <div class="flex flex-col items-center gap-3 text-center animate-pop">
-        <p class="text-6xl">⭐</p>
-        <p class="text-3xl font-bold">ผ่าน${levelName(passed)} แล้ว!</p>
-        <p class="text-lg text-stone-600 dark:text-stone-300">ต่อไป ${levelName(levelIndex)} · ${levelInfo(level())}</p>
-      </div>`)
-    timer = window.setTimeout(() => {
-      setPhase('countdown')
-      countdown(3)
-    }, LEVEL_BREAK_MS)
+    // The next countdown starts on the same sample the level sound ends on
+    beginCountdown(Math.max(endsAt, audioNow()))
   }
 
   function finish() {
-    setPhase('finished')
+    saveRun('finish')
+    phase = 'finished'
     highlight(-1)
-    renderLevelBar()
     progress.textContent = ''
     showOverlay(`
       <div class="flex flex-col items-center gap-5 text-center animate-pop">
         <p class="text-6xl">🏆</p>
-        <p class="text-3xl font-bold">เก่งมาก! ผ่านครบ ${LEVELS.length} ด่านแล้ว</p>
+        <p class="text-3xl font-bold">เก่งมาก! ผ่านครบ ${LEVEL_COUNT} ด่านแล้ว</p>
         <button data-action="restart" class="${btn.primary} px-8 py-4 text-xl shadow-lg">↻ เล่นอีกครั้ง</button>
       </div>`)
   }
 
-  /** Starts (or restarts) from level 1. */
+  /** Starts (or restarts) from level 1. The run being replaced is saved to the history first. */
   function start() {
-    clearTimer()
-    stopCardSound()
-    levelIndex = 0
-    phase = 'countdown'
+    clearTimers()
+    saveRun('restart')
+    stopDuringSound()
+    stopStartSound()
+    runStartedAt = Date.now()
+    cardsSeen = 0
+    level = 1
     prepareLevel()
-    setPhase('countdown')
-    countdown(3)
+    beginCountdown()
   }
 
   function togglePause() {
     if (phase === 'playing') {
-      clearTimer()
-      stopCardSound()
-      setPhase('paused')
-      showOverlay(`<button data-action="pause" class="${btn.primary} px-10 py-5 text-2xl shadow-lg animate-pop">▶ เล่นต่อ</button>`)
+      clearTimers()
+      pausedElapsedMs = Math.max(0, (audioNow() - levelStartedAt) * 1000)
+      stopDuringSound(LEVEL_FADE_MS)
+      phase = 'paused'
+      showOverlay(`
+        <div class="flex flex-col items-center gap-3 text-center animate-pop">
+          <p class="text-6xl">⏸</p>
+          <p class="text-2xl font-bold">แตะอีกครั้งเพื่อเล่นต่อ</p>
+          <p class="text-stone-600 dark:text-stone-300">ด่าน ${level} · ${index + 1} / ${CELLS}</p>
+        </div>`)
     } else if (phase === 'paused') {
       overlay.hidden = true
-      setPhase('playing')
-      // Replay the current card, then continue
-      if (settings.voice && index >= 0) playCard(sequence[index])
-      timer = window.setTimeout(step, level().speedMs)
+      phase = 'playing'
+      const { rate, holdMs, stepMs, totalMs } = levelTiming(level)
+      const seconds = duringDuration()
+      const resumeAt = audioNow() + 0.05
+      // Pick the sound up where it left off
+      if (settings.sound && seconds) scheduleDuringSound(rate, resumeAt, (pausedElapsedMs / totalMs) * seconds)
+      levelStartedAt = resumeAt - pausedElapsedMs / 1000
+      scheduleCards(holdMs, stepMs, totalMs, pausedElapsedMs)
     }
   }
 
@@ -266,21 +356,11 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
     else void document.documentElement.requestFullscreen?.().catch(() => {})
   }
 
-  const onFullscreenChange = () => {
-    fullscreenBtn.textContent = document.fullscreenElement ? '✕ ออกจากเต็มจอ' : '⛶ เต็มจอ'
-  }
-  if (!document.fullscreenEnabled) fullscreenBtn.hidden = true
-
   const onClick = (e: MouseEvent) => {
-    const target = e.target as HTMLElement
-    const action = target.closest<HTMLElement>('[data-action]')?.dataset.action
+    const action = (e.target as HTMLElement).closest<HTMLElement>('[data-action]')?.dataset.action
     if (action === 'start' || action === 'restart') return start()
-    if (action === 'pause') return togglePause()
-    if (action === 'fullscreen') return toggleFullscreen()
-
-    // Tap a card to hear it when the game isn't running
-    const cell = target.closest<HTMLElement>('[data-cell]')
-    if (cell && (phase === 'idle' || phase === 'paused' || phase === 'finished')) playCard(sequence[Number(cell.dataset.cell)])
+    // Anywhere else on the play area pauses and resumes
+    if (phase === 'playing' || phase === 'paused') togglePause()
   }
 
   const onKey = (e: KeyboardEvent) => {
@@ -298,18 +378,16 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
 
   root.addEventListener('click', onClick)
   window.addEventListener('keydown', onKey)
-  document.addEventListener('fullscreenchange', onFullscreenChange)
 
   prepareLevel()
   showStart()
-  updateControls()
 
   return () => {
-    clearTimer()
-    stopCardSound()
-    stopMusic()
+    saveRun('leave')
+    clearTimers()
+    stopStartSound()
+    stopDuringSound()
     root.removeEventListener('click', onClick)
     window.removeEventListener('keydown', onKey)
-    document.removeEventListener('fullscreenchange', onFullscreenChange)
   }
 }

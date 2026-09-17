@@ -12,22 +12,25 @@ npm start         # production server at http://localhost:3000 (PORT, CARDS_DIR)
 ```
 
 ## Features
-- **Game page** (`#/`): 4 levels — 1: 3×3 medium speed, 2: 4×4 fast, 3: 5×5 very fast, 4: 6×6 fastest. Each level starts with a 3-2-1 countdown, there is a short break between levels, and Restart starts again from level 1 (levels are defined in `LEVELS` in `src/game.ts`)
-  - Keyboard: `Space` = start/pause, `R` = restart, `F` = fullscreen · tap a card to hear it when the game isn't running
-- **Settings page** (`#/settings`): choose cards, add custom cards (upload an image + record or upload a sound, then trim it on the waveform), Light/Dark/System theme, music on/off with 3 tracks (slow / normal / fast with drums), pronunciation help on/off
+- **Game page** (`#/`): 10 levels on a fixed 2×4 grid, each faster than the last (1.40s per card down to 0.45s). `sound/start.*` plays before the game; `sound/during.*` loops while playing and is sped up by the same factor as the cards (level 10 ≈ 3.1×). A whistle marks each step (can be turned off)
+  - Keyboard: `Space` = start/pause, `R` = restart, `F` = fullscreen
+- **Settings page** (`#/settings`): per-level card pools (drag cards between the tray and the 10 levels; a level can never be empty), add cards, Light/Dark/System theme, game sound on/off, whistle on/off
 - Settings are saved in `localStorage`; cards are stored on the server in `cards/`
+
+## Sounds
+Put `start.*` and `during.*` in `sound/` (mp3, m4a, ogg, opus, wav, webm or flac). With no files there, the game uses countdown beeps and plays nothing while running. Override the folder with `SOUND_DIR`.
 
 ## Cards
 Every card — built-in or added from the settings page — is its own folder in `cards/`:
 
 ```
 cards/
-  chicken/  card.json  image.svg   sound.wav
-  cow/      card.json  image.svg   sound.wav
-  card-xxxx/card.json  image.webp  sound.webm   <- added from the settings page
+  chicken/  card.json  image.svg
+  cow/      card.json  image.svg
+  card-xxxx/card.json  image.webp   <- added from the settings page
 ```
 
-`card.json`: `{ "label": "ไก่", "image": "image.svg", "sound": "sound.wav", "createdAt": 1 }` (sound is optional; cards without one are silent).
+`card.json`: `{ "label": "ไก่", "image": "image.svg", "createdAt": 1 }`.
 To add a card by hand, create a folder with those files. Deleting a card in the app deletes its folder.
 
 The server (`server/`) serves `GET/POST /api/cards`, `DELETE /api/cards/:id` and the files under `/cards/`. The same code runs inside `npm run dev`.

@@ -21,6 +21,8 @@ COPY --from=build /app/dist ./dist
 COPY server ./server
 # Default cards. A named volume mounted here is seeded with them on first run.
 COPY --chown=node:node cards ./cards
+# Game sounds (sound/start.*, sound/during.*)
+COPY --chown=node:node sound ./sound
 
 USER node
 EXPOSE 3000

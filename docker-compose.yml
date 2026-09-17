@@ -10,6 +10,8 @@ services:
     volumes:
       # Cards (including ones added from the settings page) live here and survive rebuilds
       - cards:/app/cards
+      # Swap the sounds without rebuilding: uncomment to use the sound/ folder from this repo
+      # - ./sound:/app/sound:ro
 
 volumes:
   cards:

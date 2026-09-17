@@ -1,9 +1,10 @@
-import { isMusicPlaying, playCard, startMusic, stopMusic } from './audio'
+import { loadGameSounds, playCardSound } from './audio'
 import { addCard, deleteCard, getAllCards, prepareImage } from './cards'
 import { btn, esc, qs, switchHtml } from './dom'
-import { getSettings, resetSettings, updateSettings } from './settings'
+import { levelTiming } from './game'
+import { addCardToAllPools, getSettings, resetSettings, syncPoolsWithCards, updateSettings } from './settings'
 import { createTrimmer, type Trimmer } from './trimmer'
-import type { Card, MusicTrack, Settings, Theme } from './types'
+import { LEVEL_COUNT, type Card, type GameSounds, type Settings, type Theme } from './types'
 
 const section = (title: string, body: string, hint = '') => `
   <section class="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-stone-200 sm:p-6 dark:bg-stone-800 dark:ring-stone-700">
@@ -18,53 +19,109 @@ const themes: { value: Theme; label: string }[] = [
   { value: 'system', label: '💻 ตามระบบ' },
 ]
 
-const musicTracks: { value: MusicTrack; label: string; hint: string }[] = [
-  { value: 'slow', label: '🌙 เพลงช้า', hint: 'นุ่มๆ ผ่อนคลาย' },
-  { value: 'normal', label: '🎵 ปกติ', hint: 'สดใส กำลังดี' },
-  { value: 'fast', label: '🥁 เร็ว สนุก', hint: 'มีกลอง จังหวะมันส์' },
-]
-
 const pill = (active: boolean) =>
   `rounded-full px-4 py-2 text-sm font-medium transition ${active ? 'bg-emerald-500 text-white' : 'bg-stone-100 hover:bg-stone-200 dark:bg-stone-700 dark:hover:bg-stone-600'}`
 
 export async function mountSettings(root: HTMLElement): Promise<() => void> {
   let cards: Card[] = await getAllCards()
+  let sounds: GameSounds = await loadGameSounds()
   let recorder: MediaRecorder | null = null
-  /** The recorded/uploaded sound before trimming */
+  /** The recorded or uploaded clip, before trimming */
   let rawSound: Blob | null = null
   let trimmer: Trimmer | null = null
   let previewUrls: string[] = []
+  syncPoolsWithCards(cards.map((c) => c.id))
 
   const revokePreviews = () => {
     previewUrls.forEach((u) => URL.revokeObjectURL(u))
     previewUrls = []
   }
 
-  function cardsHtml(s: Settings) {
-    const enabledCount = cards.filter((c) => !s.disabledIds.includes(c.id)).length
-    return `<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-      ${cards
-        .map((c) => {
-          const on = !s.disabledIds.includes(c.id)
-          const locked = on && enabledCount === 1
-          return `
-          <div class="relative flex flex-col items-center gap-2 rounded-2xl p-3 ring-2 transition ${on ? 'ring-emerald-500 bg-emerald-50 dark:bg-emerald-950/40' : 'ring-stone-200 opacity-60 dark:ring-stone-700'}">
-            <button type="button" data-preview="${c.id}" class="aspect-square w-full" aria-label="ฟังเสียง ${esc(c.label)}">
-              <img src="${c.image}" alt="" class="h-full w-full object-contain" />
-            </button>
-            <div class="flex w-full items-center justify-between gap-2">
-              <span class="truncate font-medium">${esc(c.label)}</span>
-              <input type="checkbox" data-card="${c.id}" ${on ? 'checked' : ''} ${locked ? 'disabled title="ต้องมีอย่างน้อย 1 การ์ด"' : ''}
-                class="h-5 w-5 accent-emerald-500" aria-label="ใช้การ์ด ${esc(c.label)}" />
-            </div>
-            <button type="button" data-delete="${c.id}" class="absolute -right-2 -top-2 flex h-7 w-7 items-center justify-center rounded-full bg-rose-500 text-sm text-white shadow hover:bg-rose-600" aria-label="ลบการ์ด ${esc(c.label)}">✕</button>
-          </div>`
-        })
-        .join('')}
-    </div>`
+  const cardById = (id: string) => cards.find((c) => c.id === id)
+
+  // ---------- markup ----------
+
+  /** A card in the "all cards" tray: drag it onto a level, or delete it entirely. */
+  function trayCardHtml(c: Card) {
+    return `
+      <div class="relative">
+        <div data-drag-card="${c.id}" data-drag-from="tray" tabindex="0"
+          class="flex w-24 cursor-grab touch-none flex-col items-center gap-1 rounded-2xl bg-stone-50 p-2 ring-1 ring-stone-200 select-none active:cursor-grabbing dark:bg-stone-900 dark:ring-stone-700">
+          <img src="${c.image}" alt="" draggable="false" class="h-16 w-full object-contain" />
+          <span class="w-full truncate text-center text-xs font-medium">${esc(c.label)}</span>
+          ${
+            c.sound
+              ? `<button type="button" data-play="${c.id}" class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200">🔊 ฟัง</button>`
+              : `<span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">ไม่มีเสียง</span>`
+          }
+        </div>
+        <button type="button" data-delete="${c.id}" aria-label="ลบการ์ด ${esc(c.label)}"
+          class="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-rose-500 text-xs text-white shadow hover:bg-rose-600">✕</button>
+      </div>`
   }
 
-  /** Re-renders the page. The add-card form keeps its state (inputs, recording, trimmer) unless resetForm is set. */
+  /** A card chip inside one level's pool */
+  function chipHtml(c: Card, levelIndex: number) {
+    return `
+      <span data-drag-card="${c.id}" data-drag-from="${levelIndex}"
+        class="inline-flex cursor-grab touch-none items-center gap-1 rounded-full bg-emerald-50 py-1 pr-1 pl-2 ring-1 ring-emerald-300 select-none active:cursor-grabbing dark:bg-emerald-950/50 dark:ring-emerald-800">
+        <img src="${c.image}" alt="" draggable="false" class="h-7 w-7 object-contain" />
+        <span class="text-sm font-medium">${esc(c.label)}</span>
+        <button type="button" data-remove="${levelIndex}:${c.id}" aria-label="เอา ${esc(c.label)} ออกจากด่าน ${levelIndex + 1}"
+          class="flex h-5 w-5 items-center justify-center rounded-full text-stone-400 hover:bg-rose-500 hover:text-white">✕</button>
+      </span>`
+  }
+
+  function levelRowHtml(s: Settings, i: number) {
+    const pool = s.levelPools[i] ?? []
+    const missing = cards.filter((c) => !pool.includes(c.id))
+    return `
+      <div data-drop="${i}" class="rounded-2xl p-3 ring-1 ring-stone-200 transition dark:ring-stone-700">
+        <div class="flex items-baseline justify-between gap-2">
+          <span class="font-semibold">ด่าน ${i + 1}</span>
+          <span class="text-xs text-stone-500 tabular-nums dark:text-stone-400">${(levelTiming(i + 1).stepMs / 1000).toFixed(2)} วิ/รูป · เสียง ×${levelTiming(i + 1).rate.toFixed(2)} · ${pool.length} รูป</span>
+        </div>
+        <div class="mt-2 flex min-h-12 flex-wrap items-center gap-2">
+          ${pool.map((id) => cardById(id)).filter((c): c is Card => Boolean(c)).map((c) => chipHtml(c, i)).join('')}
+          ${
+            missing.length > 0
+              ? `<details class="relative">
+                  <summary class="cursor-pointer list-none rounded-full bg-stone-100 px-3 py-1.5 text-sm font-medium text-stone-600 hover:bg-stone-200 dark:bg-stone-700 dark:text-stone-200 dark:hover:bg-stone-600">＋ เพิ่ม</summary>
+                  <div class="absolute left-0 z-20 mt-1 flex w-52 flex-wrap gap-1 rounded-2xl bg-white p-2 shadow-lg ring-1 ring-stone-200 dark:bg-stone-800 dark:ring-stone-700">
+                    ${missing
+                      .map(
+                        (c) => `<button type="button" data-add-to="${i}:${c.id}"
+                          class="flex items-center gap-1 rounded-full px-2 py-1 text-sm hover:bg-emerald-50 dark:hover:bg-emerald-950">
+                          <img src="${c.image}" alt="" class="h-6 w-6 object-contain" />${esc(c.label)}</button>`,
+                      )
+                      .join('')}
+                  </div>
+                </details>`
+              : ''
+          }
+        </div>
+      </div>`
+  }
+
+  function soundStatus() {
+    const row = (label: string, url: string | undefined, hint: string) => `
+      <li class="flex flex-wrap items-center gap-2">
+        <span class="font-medium">${label}</span>
+        ${
+          url
+            ? `<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">พบไฟล์</span>
+               <audio controls src="${url}" class="h-8 max-w-full"></audio>`
+            : `<span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">ยังไม่มีไฟล์</span>
+               <span class="text-sm text-stone-500 dark:text-stone-400">${hint}</span>`
+        }
+      </li>`
+    return `<ul class="flex flex-col gap-3">
+      ${row('เสียงก่อนเริ่ม (sound/start)', sounds.start, 'วางไฟล์ชื่อ start.mp3 ในโฟลเดอร์ sound/')}
+      ${row('เสียงระหว่างเล่น (sound/during)', sounds.during, 'วางไฟล์ชื่อ during.mp3 ในโฟลเดอร์ sound/')}
+    </ul>`
+  }
+
+  /** Re-renders the page. The add-card form keeps what you typed unless resetForm is set. */
   function render(resetForm = false) {
     const s = getSettings()
     const keptForm = resetForm ? null : root.querySelector('[data-add-section]')
@@ -75,97 +132,190 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
           <a href="#/" class="${btn.primary}">▶ ไปเล่นเกม</a>
         </div>
 
-        ${section('1. การ์ดที่ใช้ในเกม', cardsHtml(s), 'ติ๊กเลือกการ์ดที่ต้องการ · แตะที่รูปเพื่อฟังเสียง')}
+        ${section(
+          '1. คลังรูปทั้งหมด',
+          cards.length
+            ? `<div data-drop="tray" class="flex flex-wrap gap-3 rounded-2xl p-2 transition">${cards.map(trayCardHtml).join('')}</div>`
+            : `<p class="text-stone-500 dark:text-stone-400">ยังไม่มีการ์ด เพิ่มได้ที่หัวข้อ 3</p>`,
+          'ลากรูปจากตรงนี้ไปใส่ด่านที่ต้องการ · ปุ่ม ✕ คือลบการ์ดถาวร',
+        )}
+
+        ${section(
+          `2. รูปของแต่ละด่าน (${LEVEL_COUNT} ด่าน)`,
+          `<div class="flex flex-col gap-3">${Array.from({ length: LEVEL_COUNT }, (_, i) => levelRowHtml(s, i)).join('')}</div>
+           <p data-pool-error class="mt-3 text-sm text-rose-500" hidden></p>`,
+          'ลากรูปเข้า-ออกได้อิสระ · ลากออกมานอกด่าน (หรือกด ✕) เพื่อเอาออก · ทุกด่านต้องมีอย่างน้อย 1 รูป',
+        )}
 
         <div data-add-section>${section(
-          '2. เพิ่มการ์ดของฉัน',
+          '3. เพิ่มการ์ดของฉัน',
           `<form data-add class="flex flex-col gap-4">
             <label class="flex flex-col gap-1">
               <span class="text-sm font-medium">ชื่อการ์ด</span>
               <input name="label" required maxlength="30" placeholder="เช่น หมู"
                 class="rounded-xl border-0 bg-stone-100 px-4 py-2.5 ring-1 ring-stone-200 outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-stone-900 dark:ring-stone-700" />
             </label>
-            <div class="grid gap-4 sm:grid-cols-2">
-              <label class="flex flex-col gap-1">
-                <span class="text-sm font-medium">รูปภาพ</span>
-                <input name="image" type="file" accept="image/*" required
-                  class="text-sm file:mr-3 file:rounded-full file:border-0 file:bg-emerald-100 file:px-4 file:py-2 file:font-medium file:text-emerald-700 dark:file:bg-emerald-900 dark:file:text-emerald-200" />
-                <img data-image-preview hidden class="mt-2 h-24 w-24 rounded-xl object-contain ring-1 ring-stone-200 dark:ring-stone-700" alt="" />
-              </label>
-              <div class="flex flex-col gap-1">
-                <span class="text-sm font-medium">เสียง (ไม่บังคับ)</span>
+            <label class="flex flex-col gap-1">
+              <span class="text-sm font-medium">รูปภาพ</span>
+              <input name="image" type="file" accept="image/*" required
+                class="text-sm file:mr-3 file:rounded-full file:border-0 file:bg-emerald-100 file:px-4 file:py-2 file:font-medium file:text-emerald-700 dark:file:bg-emerald-900 dark:file:text-emerald-200" />
+              <img data-image-preview hidden class="mt-2 h-24 w-24 rounded-xl object-contain ring-1 ring-stone-200 dark:ring-stone-700" alt="" />
+            </label>
+            <div class="flex flex-col gap-1">
+              <span class="text-sm font-medium">เสียงอ่านชื่อการ์ด (จำเป็น)</span>
+              <div class="flex flex-wrap items-center gap-2">
                 <input name="sound" type="file" accept="audio/*"
                   class="text-sm file:mr-3 file:rounded-full file:border-0 file:bg-emerald-100 file:px-4 file:py-2 file:font-medium file:text-emerald-700 dark:file:bg-emerald-900 dark:file:text-emerald-200" />
-                <div class="mt-2 flex flex-wrap items-center gap-2">
-                  <button type="button" data-record class="${btn.secondary} py-2! text-sm">🎙️ อัดเสียง</button>
-                  <button type="button" data-clear-sound hidden class="text-sm text-stone-500 underline-offset-4 hover:underline dark:text-stone-400">ไม่ใช้เสียง</button>
-                </div>
+                <button type="button" data-record class="${btn.secondary} py-2! text-sm">🎙️ อัดเสียง</button>
+                <button type="button" data-clear-sound hidden class="text-sm text-stone-500 underline-offset-4 hover:underline dark:text-stone-400">ล้างเสียง</button>
               </div>
             </div>
             <div data-trimmer></div>
             <p data-add-error class="text-sm text-rose-500" hidden></p>
             <div><button type="submit" class="${btn.primary}">＋ เพิ่มการ์ด</button></div>
           </form>`,
+          'อัปโหลดหรืออัดเสียงอ่านชื่อการ์ด แล้วตัดเฉพาะช่วงที่ต้องการ · การ์ดใหม่จะถูกใส่ไว้ในทุกด่านให้อัตโนมัติ',
         )}</div>
 
         ${section(
-          '3. ธีม',
+          '4. ธีม',
           `<div class="flex flex-wrap gap-2">
             ${themes.map((t) => `<button type="button" data-theme-option="${t.value}" class="${pill(s.theme === t.value)}">${t.label}</button>`).join('')}
           </div>`,
         )}
 
         ${section(
-          '4. ดนตรีประกอบ',
-          `<div class="flex flex-col gap-4">
+          '5. เสียง',
+          `<div class="flex flex-col gap-5">
             <div class="flex items-center justify-between gap-4">
-              <p class="text-sm text-stone-500 dark:text-stone-400">เล่นเพลงระหว่างเกม</p>
-              ${switchHtml('music', s.music, 'ดนตรีประกอบ')}
+              <div>
+                <p class="font-medium">เสียงเกม (start / during)</p>
+                <p class="text-sm text-stone-500 dark:text-stone-400">ยิ่งด่านสูง เสียง during จะเร่งเร็วขึ้นตามความไวของเกม</p>
+              </div>
+              ${switchHtml('sound', s.sound, 'เสียงเกม')}
             </div>
-            <div class="grid gap-2 sm:grid-cols-3 ${s.music ? '' : 'pointer-events-none opacity-40'}">
-              ${musicTracks
-                .map(
-                  (t) => `
-                <button type="button" data-music-track="${t.value}" aria-pressed="${s.musicTrack === t.value}"
-                  class="flex flex-col items-start rounded-2xl px-4 py-3 text-left ring-2 transition ${s.musicTrack === t.value ? 'bg-emerald-50 ring-emerald-500 dark:bg-emerald-950/40' : 'ring-stone-200 hover:bg-stone-50 dark:ring-stone-700 dark:hover:bg-stone-700/50'}">
-                  <span class="font-medium">${t.label}</span>
-                  <span class="text-sm text-stone-500 dark:text-stone-400">${t.hint}</span>
-                </button>`,
-                )
-                .join('')}
-            </div>
-            <div class="${s.music ? '' : 'pointer-events-none opacity-40'}">
-              <button type="button" data-music-preview class="${btn.secondary} py-2! text-sm">${isMusicPlaying() ? '⏹ หยุดฟัง' : '▶ ฟังตัวอย่างเพลง'}</button>
-            </div>
-          </div>`,
-        )}
-
-        ${section(
-          'เสียง',
-          `<div class="flex flex-col gap-4">
-            <div class="flex items-center justify-between gap-4">
-              <div><p class="font-medium">5. ช่วยออกเสียง</p><p class="text-sm text-stone-500 dark:text-stone-400">อ่านชื่อการ์ดทุกครั้งที่กรอบเขียววิ่งมาถึง</p></div>
-              ${switchHtml('voice', s.voice, 'ช่วยออกเสียง')}
+            ${soundStatus()}
+            <div class="flex items-center justify-between gap-4 border-t border-stone-200 pt-4 dark:border-stone-700">
+              <p class="font-medium">เสียงนกหวีดตอนกรอบเลื่อน</p>
+              ${switchHtml('whistle', s.whistle, 'เสียงนกหวีด')}
             </div>
           </div>`,
         )}
 
         <div class="flex justify-center">
-          <button type="button" data-reset class="text-sm text-stone-500 underline-offset-4 hover:underline dark:text-stone-400">คืนค่าเริ่มต้น</button>
+          <button type="button" data-reset class="text-sm text-stone-500 underline-offset-4 hover:underline dark:text-stone-400">คืนค่าเริ่มต้น (ทุกด่านใช้ทุกรูป)</button>
         </div>
       </div>`
     if (keptForm) root.querySelector('[data-add-section]')!.replaceWith(keptForm)
   }
 
-  async function reloadCards() {
-    cards = await getAllCards()
+  // ---------- pool editing ----------
+
+  function poolError(msg: string) {
+    const el = root.querySelector<HTMLElement>('[data-pool-error]')
+    if (!el) return
+    el.textContent = msg
+    el.hidden = !msg
+  }
+
+  function setPools(pools: string[][]) {
+    updateSettings({ levelPools: pools })
     render()
   }
 
-  const set = (patch: Partial<Settings>) => {
-    updateSettings(patch)
-    render()
+  function addToLevel(levelIndex: number, cardId: string) {
+    const pools = getSettings().levelPools.map((p) => [...p])
+    if (pools[levelIndex].includes(cardId)) return
+    pools[levelIndex].push(cardId)
+    setPools(pools)
   }
+
+  /** Removing the last card of a level is refused: every level needs at least one. */
+  function removeFromLevel(levelIndex: number, cardId: string): boolean {
+    const pools = getSettings().levelPools.map((p) => [...p])
+    if (!pools[levelIndex].includes(cardId)) return false
+    if (pools[levelIndex].length <= 1) {
+      poolError(`ด่าน ${levelIndex + 1} ต้องมีอย่างน้อย 1 รูป`)
+      return false
+    }
+    pools[levelIndex] = pools[levelIndex].filter((id) => id !== cardId)
+    setPools(pools)
+    return true
+  }
+
+  function moveBetweenLevels(from: number, to: number, cardId: string) {
+    const pools = getSettings().levelPools.map((p) => [...p])
+    if (pools[from].length <= 1) {
+      poolError(`ด่าน ${from + 1} ต้องมีอย่างน้อย 1 รูป`)
+      return
+    }
+    pools[from] = pools[from].filter((id) => id !== cardId)
+    if (!pools[to].includes(cardId)) pools[to].push(cardId)
+    setPools(pools)
+  }
+
+  // ---------- drag & drop (pointer events, so it works on touch too) ----------
+
+  let drag: { cardId: string; from: string; ghost: HTMLElement; pointerId: number } | null = null
+  let pressed: { cardId: string; from: string; x: number; y: number; el: HTMLElement; pointerId: number } | null = null
+
+  const dropZoneAt = (x: number, y: number) => document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-drop]') ?? null
+
+  function highlightZone(zone: HTMLElement | null) {
+    root.querySelectorAll<HTMLElement>('[data-drop]').forEach((el) => {
+      const on = el === zone
+      el.classList.toggle('bg-emerald-50', on)
+      el.classList.toggle('ring-emerald-500', on)
+      el.classList.toggle('dark:bg-emerald-950/40', on)
+    })
+  }
+
+  const onPointerDown = (e: PointerEvent) => {
+    if (e.button !== 0) return
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-drag-card]')
+    if (!el || (e.target as HTMLElement).closest('button')) return
+    pressed = { cardId: el.dataset.dragCard!, from: el.dataset.dragFrom!, x: e.clientX, y: e.clientY, el, pointerId: e.pointerId }
+  }
+
+  const onPointerMove = (e: PointerEvent) => {
+    if (pressed && !drag && Math.hypot(e.clientX - pressed.x, e.clientY - pressed.y) > 6) {
+      const ghost = pressed.el.cloneNode(true) as HTMLElement
+      ghost.classList.add('pointer-events-none', 'fixed', 'z-50', 'opacity-80', 'shadow-xl')
+      ghost.style.width = `${pressed.el.offsetWidth}px`
+      document.body.append(ghost)
+      document.body.classList.add('select-none')
+      drag = { cardId: pressed.cardId, from: pressed.from, ghost, pointerId: pressed.pointerId }
+      poolError('')
+    }
+    if (!drag || e.pointerId !== drag.pointerId) return
+    e.preventDefault()
+    drag.ghost.style.left = `${e.clientX - drag.ghost.offsetWidth / 2}px`
+    drag.ghost.style.top = `${e.clientY - drag.ghost.offsetHeight / 2}px`
+    highlightZone(dropZoneAt(e.clientX, e.clientY))
+  }
+
+  const onPointerUp = (e: PointerEvent) => {
+    pressed = null
+    if (!drag || e.pointerId !== drag.pointerId) return
+    const { cardId, from, ghost } = drag
+    drag = null
+    ghost.remove()
+    document.body.classList.remove('select-none')
+    const zone = dropZoneAt(e.clientX, e.clientY)
+    highlightZone(null)
+
+    const target = zone?.dataset.drop
+    if (from === 'tray') {
+      // From the tray: dropping on a level adds it; anywhere else does nothing
+      if (target && target !== 'tray') addToLevel(Number(target), cardId)
+      return
+    }
+    const fromLevel = Number(from)
+    if (!target || target === 'tray') removeFromLevel(fromLevel, cardId)
+    else if (Number(target) !== fromLevel) moveBetweenLevels(fromLevel, Number(target), cardId)
+  }
+
+  // ---------- other interaction ----------
 
   const onClick = async (e: MouseEvent) => {
     const t = (e.target as HTMLElement).closest<HTMLElement>('button')
@@ -173,38 +323,41 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
     const s = getSettings()
 
     if (t.dataset.themeOption) {
-      set({ theme: t.dataset.themeOption as Theme })
-    } else if (t.dataset.switch) {
-      const key = t.dataset.switch as 'music' | 'voice'
-      if (key === 'music' && s.music) stopMusic()
-      set({ [key]: !s[key] })
-    } else if (t.dataset.musicTrack) {
-      const track = t.dataset.musicTrack as MusicTrack
-      if (isMusicPlaying()) startMusic(track)
-      set({ musicTrack: track })
-    } else if (t.dataset.musicPreview !== undefined) {
-      if (isMusicPlaying()) stopMusic()
-      else startMusic(s.musicTrack)
+      updateSettings({ theme: t.dataset.themeOption as Theme })
       render()
+    } else if (t.dataset.switch) {
+      const key = t.dataset.switch as 'sound' | 'whistle'
+      updateSettings({ [key]: !s[key] })
+      render()
+    } else if (t.dataset.addTo) {
+      const [levelIndex, cardId] = t.dataset.addTo.split(':')
+      addToLevel(Number(levelIndex), cardId)
+    } else if (t.dataset.remove) {
+      const [levelIndex, cardId] = t.dataset.remove.split(':')
+      removeFromLevel(Number(levelIndex), cardId)
+    } else if (t.dataset.play) {
+      const card = cardById(t.dataset.play)
+      if (card?.sound) playCardSound(card.sound)
+    } else if (t.dataset.record !== undefined) {
+      await toggleRecording(t)
     } else if (t.dataset.clearSound !== undefined) {
       clearSound()
-    } else if (t.dataset.preview) {
-      const card = cards.find((c) => c.id === t.dataset.preview)
-      if (card) playCard(card)
     } else if (t.dataset.delete) {
-      const card = cards.find((c) => c.id === t.dataset.delete)
-      if (!card || !confirm(`ลบการ์ด "${card.label}" ? (ลบโฟลเดอร์ใน cards/ ด้วย)`)) return
+      const card = cardById(t.dataset.delete)
+      if (!card || !confirm(`ลบการ์ด "${card.label}" ? (ลบโฟลเดอร์ใน cards/ และเอาออกจากทุกด่าน)`)) return
       try {
         await deleteCard(card.id)
       } catch (err) {
         return alert(`ลบไม่สำเร็จ: ${(err as Error).message}`)
       }
-      updateSettings({ disabledIds: s.disabledIds.filter((id) => id !== card.id) })
-      await reloadCards()
+      cards = await getAllCards()
+      syncPoolsWithCards(cards.map((c) => c.id))
+      render()
     } else if (t.dataset.reset !== undefined) {
-      if (confirm('คืนค่าการตั้งค่าทั้งหมดเป็นค่าเริ่มต้น? (การ์ดที่เพิ่มไว้จะยังอยู่)')) set(resetSettings())
-    } else if (t.dataset.record !== undefined) {
-      await toggleRecording(t)
+      if (confirm('คืนค่าการตั้งค่าทั้งหมด? (การ์ดยังอยู่ครบ ทุกด่านจะใช้ทุกรูป)')) {
+        resetSettings(cards.map((c) => c.id))
+        render()
+      }
     }
   }
 
@@ -232,22 +385,22 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
       button.textContent = '⏹ หยุดอัด'
       button.classList.add('bg-rose-500!', 'text-white!')
     } catch {
-      showError('ไม่สามารถใช้ไมโครโฟนได้')
+      addError('ไม่สามารถใช้ไมโครโฟนได้')
     }
   }
 
-  /** Shows the trim editor for a freshly recorded or uploaded sound. */
+  /** Shows the trim editor for a freshly recorded or uploaded clip. */
   async function setSound(blob: Blob) {
     trimmer?.destroy()
     trimmer = null
     rawSound = blob
-    showError('')
+    addError('')
     qs(root, '[data-clear-sound]').hidden = false
     try {
       trimmer = await createTrimmer(qs(root, '[data-trimmer]'), blob)
     } catch (err) {
       console.warn('Cannot decode audio for trimming', err)
-      showError('เปิดไฟล์เสียงนี้เพื่อตัดไม่ได้ จะใช้เสียงทั้งไฟล์แทน')
+      addError('เปิดไฟล์เสียงนี้เพื่อตัดไม่ได้ จะใช้เสียงทั้งไฟล์แทน')
     }
   }
 
@@ -258,10 +411,10 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
     const input = root.querySelector<HTMLInputElement>('input[name="sound"]')
     if (input) input.value = ''
     qs(root, '[data-clear-sound]').hidden = true
-    showError('')
+    addError('')
   }
 
-  function showError(msg: string) {
+  function addError(msg: string) {
     const el = qs(root, '[data-add-error]')
     el.textContent = msg
     el.hidden = !msg
@@ -269,20 +422,14 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
 
   const onChange = (e: Event) => {
     const t = e.target as HTMLInputElement
-    const s = getSettings()
-    if (t.dataset.card) {
-      const disabled = new Set(s.disabledIds)
-      if (t.checked) disabled.delete(t.dataset.card)
-      else disabled.add(t.dataset.card)
-      set({ disabledIds: [...disabled] })
+    if (t.name === 'sound' && t.files?.[0]) {
+      void setSound(t.files[0])
     } else if (t.name === 'image' && t.files?.[0]) {
       const img = qs<HTMLImageElement>(root, '[data-image-preview]')
       const url = URL.createObjectURL(t.files[0])
       previewUrls.push(url)
       img.src = url
       img.hidden = false
-    } else if (t.name === 'sound' && t.files?.[0]) {
-      void setSound(t.files[0])
     }
   }
 
@@ -293,21 +440,24 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
     const data = new FormData(form)
     const label = String(data.get('label') ?? '').trim()
     const image = data.get('image') as File | null
+    const showError = addError
 
     if (!label) return showError('กรุณาใส่ชื่อการ์ด')
     if (!image || image.size === 0) return showError('กรุณาเลือกรูปภาพ')
+    if (!rawSound) return showError('กรุณาใส่เสียงอ่านชื่อการ์ด (อัปโหลดไฟล์หรือกดอัดเสียง)')
 
     const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!
     submit.disabled = true
     try {
-      const sound = trimmer ? await trimmer.export() : (rawSound ?? undefined)
-      if (sound && sound.size > 5 * 1024 * 1024) throw new Error('ไฟล์เสียงใหญ่เกินไป (สูงสุด 5MB)')
+      const before = new Set(cards.map((c) => c.id))
+      const sound = trimmer ? await trimmer.export() : rawSound!
       await addCard(label, await prepareImage(image), sound)
       trimmer?.destroy()
       trimmer = null
       rawSound = null
       revokePreviews()
       cards = await getAllCards()
+      for (const c of cards) if (!before.has(c.id)) addCardToAllPools(c.id)
       render(true)
     } catch (err) {
       console.error(err)
@@ -320,14 +470,33 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
   root.addEventListener('click', onClick)
   root.addEventListener('change', onChange)
   root.addEventListener('submit', onSubmit)
+  root.addEventListener('pointerdown', onPointerDown)
+  window.addEventListener('pointermove', onPointerMove)
+  window.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('pointercancel', onPointerUp)
+
+  // Pick up sound files that were added while the page is open
+  const soundPoll = window.setInterval(async () => {
+    const found = await loadGameSounds()
+    if (found.start !== sounds.start || found.during !== sounds.during) {
+      sounds = found
+      render()
+    }
+  }, 10000)
 
   return () => {
     recorder?.stop()
     trimmer?.destroy()
-    stopMusic()
+    clearInterval(soundPoll)
+    drag?.ghost.remove()
+    document.body.classList.remove('select-none')
     revokePreviews()
     root.removeEventListener('click', onClick)
     root.removeEventListener('change', onChange)
     root.removeEventListener('submit', onSubmit)
+    root.removeEventListener('pointerdown', onPointerDown)
+    window.removeEventListener('pointermove', onPointerMove)
+    window.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('pointercancel', onPointerUp)
   }
 }
