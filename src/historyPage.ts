@@ -82,7 +82,7 @@ export async function mountHistory(root: HTMLElement): Promise<() => void> {
 
   function render() {
     root.innerHTML = `
-      <div class="mx-auto flex max-w-4xl flex-col gap-5 pt-2 pb-10">
+      <div class="mx-auto flex max-w-5xl flex-col gap-5 pt-2 pb-10">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 class="text-2xl font-bold">📋 ประวัติการเล่น</h1>

@@ -62,10 +62,6 @@ export function addCardToAllPools(cardId: string): Settings {
   return updateSettings({ levelPools: current.levelPools.map((pool) => (pool.includes(cardId) ? pool : [...pool, cardId])) })
 }
 
-export function resetSettings(cardIds: string[]): Settings {
-  return updateSettings({ ...DEFAULT_SETTINGS, levelPools: Array.from({ length: LEVEL_COUNT }, () => [...cardIds]) })
-}
-
 const darkQuery = matchMedia('(prefers-color-scheme: dark)')
 
 export function applyTheme(theme: Theme = current.theme) {

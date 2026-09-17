@@ -2,7 +2,7 @@ import { loadGameSounds, playCardSound } from './audio'
 import { addCard, deleteCard, getAllCards, prepareImage } from './cards'
 import { btn, esc, qs, switchHtml } from './dom'
 import { DIFFICULTIES } from './game'
-import { addCardToAllPools, getSettings, resetSettings, syncPoolsWithCards, updateSettings } from './settings'
+import { addCardToAllPools, DEFAULT_SETTINGS, getSettings, syncPoolsWithCards, updateSettings } from './settings'
 import { createTrimmer, type Trimmer } from './trimmer'
 import { LEVEL_COUNT, type Card, type Difficulty, type GameSounds, type Settings, type Theme } from './types'
 
@@ -31,6 +31,37 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
   let trimmer: Trimmer | null = null
   let previewUrls: string[] = []
   syncPoolsWithCards(cards.map((c) => c.id))
+
+  /** What the page is editing. Nothing is kept until Save is pressed (cards themselves save right away). */
+  const copy = (from: Settings): Settings => ({ ...from, levelPools: from.levelPools.map((p) => [...p]) })
+  let draft = copy(getSettings())
+  let dirty = false
+
+  function editDraft(patch: Partial<Settings>) {
+    draft = { ...draft, ...patch }
+    dirty = true
+    render()
+  }
+
+  /** Same clean-up as syncPoolsWithCards, applied to the draft */
+  function syncDraftWithCards() {
+    const ids = cards.map((c) => c.id)
+    const pools = draft.levelPools.map((pool) => {
+      const kept = [...new Set(pool.filter((id) => ids.includes(id)))]
+      return kept.length > 0 ? kept : [...ids]
+    })
+    draft = { ...draft, levelPools: pools }
+  }
+
+  function save() {
+    updateSettings(copy(draft))
+    dirty = false
+    render()
+  }
+
+  const onBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (dirty) e.preventDefault()
+  }
 
   const revokePreviews = () => {
     previewUrls.forEach((u) => URL.revokeObjectURL(u))
@@ -123,13 +154,12 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
 
   /** Re-renders the page. The add-card form keeps what you typed unless resetForm is set. */
   function render(resetForm = false) {
-    const s = getSettings()
+    const s = draft
     const keptForm = resetForm ? null : root.querySelector('[data-add-section]')
     root.innerHTML = `
-      <div class="mx-auto flex max-w-3xl flex-col gap-5 pt-2 pb-10">
+      <div class="mx-auto flex max-w-5xl flex-col gap-5 pt-2 pb-10">
         <div class="flex items-center justify-between">
           <h1 class="text-2xl font-bold">⚙️ ตั้งค่า</h1>
-          <a href="#/" class="${btn.primary}">▶ ไปเล่นเกม</a>
         </div>
 
         ${section(
@@ -210,6 +240,13 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
           </div>`,
         )}
 
+        <div class="sticky bottom-3 z-20 flex items-center justify-end gap-3 rounded-3xl bg-white/90 p-3 shadow-lg ring-1 ring-stone-200 backdrop-blur dark:bg-stone-800/90 dark:ring-stone-700">
+          <span class="text-sm ${dirty ? 'text-amber-600 dark:text-amber-400' : 'text-stone-500 dark:text-stone-400'}">
+            ${dirty ? 'มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก' : 'บันทึกแล้ว ✓'}
+          </span>
+          <button type="button" data-save class="${btn.primary} px-8" ${dirty ? '' : 'disabled'}>💾 Save setting</button>
+        </div>
+
         <div class="flex justify-center">
           <button type="button" data-reset class="text-sm text-stone-500 underline-offset-4 hover:underline dark:text-stone-400">คืนค่าเริ่มต้น (ทุกด่านใช้ทุกรูป)</button>
         </div>
@@ -227,12 +264,11 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
   }
 
   function setPools(pools: string[][]) {
-    updateSettings({ levelPools: pools })
-    render()
+    editDraft({ levelPools: pools })
   }
 
   function addToLevel(levelIndex: number, cardId: string) {
-    const pools = getSettings().levelPools.map((p) => [...p])
+    const pools = draft.levelPools.map((p) => [...p])
     if (pools[levelIndex].includes(cardId)) return
     pools[levelIndex].push(cardId)
     setPools(pools)
@@ -240,7 +276,7 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
 
   /** Removing the last card of a level is refused: every level needs at least one. */
   function removeFromLevel(levelIndex: number, cardId: string): boolean {
-    const pools = getSettings().levelPools.map((p) => [...p])
+    const pools = draft.levelPools.map((p) => [...p])
     if (!pools[levelIndex].includes(cardId)) return false
     if (pools[levelIndex].length <= 1) {
       poolError(`ด่าน ${levelIndex + 1} ต้องมีอย่างน้อย 1 รูป`)
@@ -252,7 +288,7 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
   }
 
   function moveBetweenLevels(from: number, to: number, cardId: string) {
-    const pools = getSettings().levelPools.map((p) => [...p])
+    const pools = draft.levelPools.map((p) => [...p])
     if (pools[from].length <= 1) {
       poolError(`ด่าน ${from + 1} ต้องมีอย่างน้อย 1 รูป`)
       return
@@ -328,18 +364,16 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
   const onClick = async (e: MouseEvent) => {
     const t = (e.target as HTMLElement).closest<HTMLElement>('button')
     if (!t) return
-    const s = getSettings()
 
-    if (t.dataset.difficultyOption) {
-      updateSettings({ difficulty: t.dataset.difficultyOption as Difficulty })
-      render()
+    if (t.dataset.save !== undefined) {
+      save()
+    } else if (t.dataset.difficultyOption) {
+      editDraft({ difficulty: t.dataset.difficultyOption as Difficulty })
     } else if (t.dataset.themeOption) {
-      updateSettings({ theme: t.dataset.themeOption as Theme })
-      render()
+      editDraft({ theme: t.dataset.themeOption as Theme })
     } else if (t.dataset.switch) {
       const key = t.dataset.switch as 'sound' | 'whistle'
-      updateSettings({ [key]: !s[key] })
-      render()
+      editDraft({ [key]: !draft[key] })
     } else if (t.dataset.addTo) {
       const [levelIndex, cardId] = t.dataset.addTo.split(':')
       addToLevel(Number(levelIndex), cardId)
@@ -363,11 +397,11 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
       }
       cards = await getAllCards()
       syncPoolsWithCards(cards.map((c) => c.id))
+      syncDraftWithCards()
       render()
     } else if (t.dataset.reset !== undefined) {
       if (confirm('คืนค่าการตั้งค่าทั้งหมด? (การ์ดยังอยู่ครบ ทุกด่านจะใช้ทุกรูป)')) {
-        resetSettings(cards.map((c) => c.id))
-        render()
+        editDraft({ ...copy(DEFAULT_SETTINGS), levelPools: Array.from({ length: LEVEL_COUNT }, () => cards.map((c) => c.id)) })
       }
     }
   }
@@ -468,7 +502,11 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
       rawSound = null
       revokePreviews()
       cards = await getAllCards()
-      for (const c of cards) if (!before.has(c.id)) addCardToAllPools(c.id)
+      for (const c of cards) {
+        if (before.has(c.id)) continue
+        addCardToAllPools(c.id)
+        draft = { ...draft, levelPools: draft.levelPools.map((pool) => (pool.includes(c.id) ? pool : [...pool, c.id])) }
+      }
       render(true)
     } catch (err) {
       console.error(err)
@@ -478,6 +516,7 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
   }
 
   render()
+  window.addEventListener('beforeunload', onBeforeUnload)
   root.addEventListener('click', onClick)
   root.addEventListener('change', onChange)
   root.addEventListener('submit', onSubmit)
@@ -496,6 +535,7 @@ export async function mountSettings(root: HTMLElement): Promise<() => void> {
   }, 10000)
 
   return () => {
+    window.removeEventListener('beforeunload', onBeforeUnload)
     recorder?.stop()
     trimmer?.destroy()
     clearInterval(soundPoll)

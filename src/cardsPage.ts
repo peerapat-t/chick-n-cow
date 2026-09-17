@@ -34,27 +34,27 @@ export async function mountCards(root: HTMLElement): Promise<() => void> {
     const levels = levelsOf(pools, card.id)
     return `
       <button type="button" data-play="${card.id}" ${card.sound ? '' : 'disabled'}
-        class="group flex flex-col items-center gap-2 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-stone-200 transition hover:ring-emerald-400 active:scale-95 disabled:opacity-60 dark:bg-stone-800 dark:ring-stone-700">
-        <img src="${card.image}" alt="" draggable="false" class="h-28 w-full select-none object-contain" />
-        <span class="text-lg font-semibold">${esc(card.label)}</span>
+        class="group flex flex-col items-center gap-2 rounded-3xl bg-white p-4 shadow-sm ring-2 ring-stone-200 transition hover:ring-emerald-400 active:scale-95 dark:bg-stone-800 dark:ring-stone-700">
+        <img src="${card.image}" alt="" draggable="false" class="h-36 w-full select-none object-contain sm:h-44" />
+        <span class="text-2xl font-bold">${esc(card.label)}</span>
         ${
           card.sound
             ? `<span class="rounded-full bg-emerald-100 px-3 py-1 text-sm font-medium text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200">🔊 แตะเพื่อฟัง</span>`
             : `<span class="rounded-full bg-amber-100 px-3 py-1 text-sm text-amber-700 dark:bg-amber-950 dark:text-amber-300">ยังไม่มีเสียง</span>`
         }
-        <span class="text-xs text-stone-400 dark:text-stone-500">
+        <span class="text-sm text-stone-500 dark:text-stone-400">
           ${used ? `อยู่ในด่าน ${levelRanges(levels)}` : 'ยังไม่ได้ใส่ในด่านไหน'}
         </span>
       </button>`
   }
 
   const grid = (cards: Card[], used: boolean) =>
-    `<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">${cards.map((c) => cardHtml(c, used)).join('')}</div>`
+    `<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">${cards.map((c) => cardHtml(c, used)).join('')}</div>`
 
   const noSound = inUse.filter((c) => !c.sound).length
 
   root.innerHTML = `
-    <div class="mx-auto flex max-w-4xl flex-col gap-5 pt-2 pb-10">
+    <div class="mx-auto flex max-w-5xl flex-col gap-5 pt-2 pb-10">
       <div>
         <h1 class="text-2xl font-bold">📚 สรุปการ์ด</h1>
         <p class="mt-0.5 text-sm text-stone-500 dark:text-stone-400">
