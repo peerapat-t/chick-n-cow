@@ -22,7 +22,13 @@ const START_SPEED_MS = 1400
 const END_SPEED_MS = 450
 
 /** How fast the sounds are played: 1× on level 1, RATE_END× on the last level. */
-const RATE_END = START_SPEED_MS / END_SPEED_MS
+const RATE_END = 2.2
+
+/**
+ * Shapes the climb between those two. Above 1 the early levels speed up gently and the
+ * jumps get bigger later, which keeps levels 2-4 close to the pace of level 1.
+ */
+const RATE_CURVE = 1.4
 
 /** No frame at all for this share of the sound — the get-ready part... */
 const INTRO_SHARE = 0.5
@@ -35,7 +41,7 @@ const DEFAULT_COUNT_MS = 1000
 /** The level sound fades out this quickly if a level is cut short */
 const LEVEL_FADE_MS = 200
 
-const rateOf = (level: number) => RATE_END ** ((level - 1) / (LEVEL_COUNT - 1))
+const rateOf = (level: number) => 1 + (RATE_END - 1) * ((level - 1) / (LEVEL_COUNT - 1)) ** RATE_CURVE
 
 export interface LevelTiming {
   /** Playback rate of the sounds */
