@@ -18,14 +18,13 @@ import { getSettings, syncPoolsWithCards } from './settings'
 import { CELLS, COLS, LEVEL_COUNT, ROWS, type Card, type Difficulty } from './types'
 
 /**
- * The pace of every level, which never changes as the levels go by. Easy and medium are set
- * by how long each card gets, and the sound is played at whatever tempo fits that; hard is set
- * by the tempo itself, so the cards follow however fast the sound runs.
+ * Time per card, the same on every level of a difficulty. The sound is then played at whatever
+ * tempo makes the cards land on it.
  */
-const PACE: Record<Difficulty, { stepMs: number; rate?: never } | { rate: number; stepMs?: never }> = {
-  easy: { stepMs: 377 },
-  medium: { stepMs: 322 },
-  hard: { rate: 2.8 },
+const STEP_MS: Record<Difficulty, number> = {
+  easy: 400,
+  medium: 340,
+  hard: 280,
 }
 
 /** Stands in for the length of sound/during.* when there is no file to take the timing from */
@@ -66,14 +65,9 @@ export interface LevelTiming {
  */
 export function levelTiming(difficulty: Difficulty = getSettings().difficulty): LevelTiming {
   const seconds = duringDuration() ?? FALLBACK_SECONDS
-  const pace = PACE[difficulty]
-  if (pace.stepMs !== undefined) {
-    // Play the sound at whatever tempo makes the cards land on the difficulty's time per card
-    const playMs = (pace.stepMs * CELLS) / MAIN_SHARE
-    return { rate: (seconds * 1000) / playMs, holdMs: playMs * INTRO_SHARE, stepMs: pace.stepMs, totalMs: playMs }
-  }
-  const playMs = (seconds / pace.rate) * 1000
-  return { rate: pace.rate, holdMs: playMs * INTRO_SHARE, stepMs: (playMs * MAIN_SHARE) / CELLS, totalMs: playMs }
+  const stepMs = STEP_MS[difficulty]
+  const playMs = (stepMs * CELLS) / MAIN_SHARE
+  return { rate: (seconds * 1000) / playMs, holdMs: playMs * INTRO_SHARE, stepMs, totalMs: playMs }
 }
 
 /** How long the whole 3-2-1 takes at this level's tempo, in ms */
