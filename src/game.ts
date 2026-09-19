@@ -17,22 +17,19 @@ import { saveRunHistory, type RunResult } from './history'
 import { getSettings, syncPoolsWithCards } from './settings'
 import { CELLS, COLS, LEVEL_COUNT, ROWS, type Card, type Difficulty } from './types'
 
-/** Card speeds used only when there is no sound/during.* file to take the timing from */
-const START_SPEED_MS = 1400
-const END_SPEED_MS = 450
-
-/** Easy keeps every level at this time per card */
-const EASY_STEP_MS = 320
-
 /**
- * How fast the sounds are played on medium and hard: 1× on level 1, `end`× on the last level.
- * `curve` shapes the climb between those two. Above 1 the early levels speed up gently and
- * the jumps get bigger later, which keeps levels 2-4 close to the pace of level 1.
+ * The pace of every level, which never changes as the levels go by. Easy and medium are set
+ * by how long each card gets, and the sound is played at whatever tempo fits that; hard is set
+ * by the tempo itself, so the cards follow however fast the sound runs.
  */
-const CLIMB: Record<Exclude<Difficulty, 'easy'>, { end: number; curve: number }> = {
-  medium: { end: 2.2, curve: 1.4 },
-  hard: { end: 3.2, curve: 1 },
+const PACE: Record<Difficulty, { stepMs: number; rate?: never } | { rate: number; stepMs?: never }> = {
+  easy: { stepMs: 377 },
+  medium: { stepMs: 322 },
+  hard: { rate: 2.8 },
 }
+
+/** Stands in for the length of sound/during.* when there is no file to take the timing from */
+const FALLBACK_SECONDS = 5
 
 export const DIFFICULTIES: { value: Difficulty; label: string }[] = [
   { value: 'easy', label: 'Easy' },
@@ -51,9 +48,6 @@ const DEFAULT_COUNT_MS = 1000
 /** The level sound fades out this quickly if a level is cut short */
 const LEVEL_FADE_MS = 200
 
-/** 0 on level 1 up to 1 on the last level, bent by the difficulty's curve */
-const climbOf = (level: number, { curve }: { curve: number }) => ((level - 1) / (LEVEL_COUNT - 1)) ** curve
-
 export interface LevelTiming {
   /** Playback rate of the sounds */
   rate: number
@@ -67,28 +61,19 @@ export interface LevelTiming {
 
 /**
  * One level lasts exactly one play of sound/during.*: no frame during the intro, then the
- * frame covers all the cards over the rest of it, finishing as the sound ends.
- * With no sound file it falls back to fixed card speeds.
+ * frame covers all the cards over the rest of it, finishing as the sound ends. Every level of
+ * a difficulty runs at the same pace, so this only depends on which difficulty is being played.
  */
-export function levelTiming(level: number, difficulty: Difficulty = getSettings().difficulty): LevelTiming {
-  const seconds = duringDuration()
-  if (difficulty === 'easy') {
-    if (!seconds) return { rate: 1, holdMs: EASY_STEP_MS, stepMs: EASY_STEP_MS, totalMs: EASY_STEP_MS * (CELLS + 1) }
-    // Play the sound at whatever tempo makes the cards land on EASY_STEP_MS
-    const playMs = (EASY_STEP_MS * CELLS) / MAIN_SHARE
-    return { rate: (seconds * 1000) / playMs, holdMs: playMs * INTRO_SHARE, stepMs: EASY_STEP_MS, totalMs: playMs }
+export function levelTiming(difficulty: Difficulty = getSettings().difficulty): LevelTiming {
+  const seconds = duringDuration() ?? FALLBACK_SECONDS
+  const pace = PACE[difficulty]
+  if (pace.stepMs !== undefined) {
+    // Play the sound at whatever tempo makes the cards land on the difficulty's time per card
+    const playMs = (pace.stepMs * CELLS) / MAIN_SHARE
+    return { rate: (seconds * 1000) / playMs, holdMs: playMs * INTRO_SHARE, stepMs: pace.stepMs, totalMs: playMs }
   }
-  const climb = CLIMB[difficulty]
-  const t = climbOf(level, climb)
-  const rate = 1 + (climb.end - 1) * t
-  if (!seconds) {
-    // Medium keeps the original even climb; hard stretches it by how much further its sound climbs
-    const linear = ((level - 1) / (LEVEL_COUNT - 1)) * ((climb.end - 1) / (CLIMB.medium.end - 1))
-    const stepMs = Math.round(START_SPEED_MS * (END_SPEED_MS / START_SPEED_MS) ** linear)
-    return { rate, holdMs: stepMs, stepMs, totalMs: stepMs * (CELLS + 1) }
-  }
-  const playMs = (seconds / rate) * 1000
-  return { rate, holdMs: playMs * INTRO_SHARE, stepMs: (playMs * MAIN_SHARE) / CELLS, totalMs: playMs }
+  const playMs = (seconds / pace.rate) * 1000
+  return { rate: pace.rate, holdMs: playMs * INTRO_SHARE, stepMs: (playMs * MAIN_SHARE) / CELLS, totalMs: playMs }
 }
 
 /** How long the whole 3-2-1 takes at this level's tempo, in ms */
@@ -260,7 +245,7 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
   function beginCountdown(startAt?: number) {
     phase = 'countdown'
     renderStatus()
-    const { rate } = levelTiming(level)
+    const { rate } = levelTiming()
     const withSound = settings.sound && hasStartSound()
     const begin = startAt ?? audioNow() + 0.05
     const segment = withSound ? scheduleStartSound(rate, begin) : null
@@ -294,7 +279,7 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
   function startLevel(startAt: number) {
     phase = 'playing'
     overlay.hidden = true
-    const { holdMs, stepMs, totalMs } = levelTiming(level)
+    const { holdMs, stepMs, totalMs } = levelTiming()
     levelStartedAt = startAt
     pausedElapsedMs = 0
     index = -1
@@ -319,7 +304,7 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
 
   function completeLevel() {
     clearTimers()
-    const endsAt = levelStartedAt + (levelTiming(level).totalMs - pausedElapsedMs) / 1000
+    const endsAt = levelStartedAt + (levelTiming().totalMs - pausedElapsedMs) / 1000
     if (level >= LEVEL_COUNT) return finish()
     level++
     prepareLevel()
@@ -368,7 +353,7 @@ export async function mountGame(root: HTMLElement): Promise<() => void> {
     } else if (phase === 'paused') {
       overlay.hidden = true
       phase = 'playing'
-      const { rate, holdMs, stepMs, totalMs } = levelTiming(level)
+      const { rate, holdMs, stepMs, totalMs } = levelTiming()
       const seconds = duringDuration()
       const resumeAt = audioNow() + 0.05
       // Pick the sound up where it left off
